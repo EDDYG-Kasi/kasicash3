@@ -1,12 +1,14 @@
 /* eslint-disable @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/require-await */
 import { createHmac } from 'crypto';
 import {
+  BadRequestException,
   ForbiddenException,
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { verifyWhatsAppSignature } from './whatsapp-signature.util';
+import { DevController } from './dev.controller';
 import { WhatsAppController } from './whatsapp.controller';
 import {
   IngestionService,
@@ -173,6 +175,51 @@ describe('IngestionService', () => {
     const result = await service.ingestWebhook(payload, Buffer.from('{}'));
     expect(result.stored).toBe(1);
     expect(manager.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores and processes a synthetic dev text message synchronously', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        wa_from: '27831234567',
+        wa_message_id: 'dev.test',
+        payload_hash: 'hash-1',
+        text_body: 'sold airtime R30',
+        message_type: 'text',
+        wa_timestamp: new Date('2026-01-01T10:00:00Z'),
+        received_at: new Date('2026-01-01T10:00:05Z'),
+      },
+    ]);
+    const { service, manager, parsing } = makeService({}, {}, {}, query);
+
+    const result = await service.ingestSyntheticText({
+      from: '27831234567',
+      text: 'sold airtime R30',
+      contactName: 'Thabo',
+      messageId: 'dev.test',
+      timestamp: new Date('2026-01-01T10:00:00Z'),
+    });
+
+    expect(result).toMatchObject({
+      stored: true,
+      duplicate: false,
+      processed: true,
+      inboundId: 'im-1',
+      waMessageId: 'dev.test',
+    });
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        waMessageId: 'dev.test',
+        waFrom: '27831234567',
+        textBody: 'sold airtime R30',
+        messageType: 'text',
+      }),
+    );
+    expect((parsing as any).parseAndPost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        waMessageId: 'dev.test',
+        textBody: 'sold airtime R30',
+      }),
+    );
   });
 
   it('collapses duplicate deliveries on the unique wa_message_id', async () => {
@@ -376,6 +423,66 @@ describe('IngestionService', () => {
     expect(backoffMs(2)).toBe(120_000);
     expect(backoffMs(3)).toBe(240_000);
     expect(backoffMs(99)).toBe(60 * 60_000); // capped at 1h
+  });
+});
+
+describe('DevController', () => {
+  const enabledConfig = {
+    get: (k: string) => (k === 'KASICASH_DEV_TOOLS' ? 'true' : undefined),
+  } as unknown as ConfigService;
+  const disabledConfig = {
+    get: () => undefined,
+  } as unknown as ConfigService;
+
+  it('rejects simulation when developer tools are disabled', async () => {
+    const ingestion = {
+      ingestSyntheticText: jest.fn(),
+    } as unknown as IngestionService;
+    const controller = new DevController(ingestion, disabledConfig);
+
+    await expect(
+      controller.simulateWhatsAppText({ text: 'sold R30 airtime' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect((ingestion as any).ingestSyntheticText).not.toHaveBeenCalled();
+  });
+
+  it('normalizes input and runs a synthetic WhatsApp text when enabled', async () => {
+    const ingestion = {
+      ingestSyntheticText: jest.fn().mockResolvedValue({
+        stored: true,
+        duplicate: false,
+        processed: true,
+        inboundId: 'im-1',
+        waMessageId: 'dev.1',
+      }),
+    } as unknown as IngestionService;
+    const controller = new DevController(ingestion, enabledConfig);
+
+    const result = await controller.simulateWhatsAppText({
+      from: '+27 83 123 4567',
+      text: '  sold   R30 airtime ',
+      contactName: '  Thabo  ',
+      messageId: 'dev.1',
+    });
+
+    expect((ingestion as any).ingestSyntheticText).toHaveBeenCalledWith({
+      from: '27831234567',
+      text: 'sold R30 airtime',
+      contactName: 'Thabo',
+      messageId: 'dev.1',
+    });
+    expect(result).toMatchObject({ ok: true, processed: true });
+  });
+
+  it('rejects missing text', async () => {
+    const controller = new DevController(
+      { ingestSyntheticText: jest.fn() } as unknown as IngestionService,
+      enabledConfig,
+    );
+
+    await expect(controller.simulateWhatsAppText({})).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
   });
 });
 

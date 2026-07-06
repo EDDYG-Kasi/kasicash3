@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { InboundMessage } from './entities/inbound-message.entity';
+import { DevController } from './dev.controller';
 import { WhatsAppController } from './whatsapp.controller';
 import { IngestionService } from './ingestion.service';
 import { RecoveryService } from './recovery.service';
@@ -15,7 +16,7 @@ import {
 
 @Module({
   imports: [TypeOrmModule.forFeature([InboundMessage]), ParsingModule],
-  controllers: [WhatsAppController],
+  controllers: [WhatsAppController, DevController],
   providers: [
     IngestionService,
     RecoveryService,

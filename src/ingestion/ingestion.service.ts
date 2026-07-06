@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { WhatsAppClient } from './whatsapp.client';
 import { DataSource, QueryFailedError } from 'typeorm';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { InboundMessage } from './entities/inbound-message.entity';
 import { OnboardingService } from './onboarding.service';
 import { WHATSAPP_CLIENT } from './whatsapp.client';
@@ -49,6 +49,22 @@ interface ClaimedInbound {
   message_type: string;
   wa_timestamp: Date;
   received_at: Date;
+}
+
+export interface SyntheticTextInput {
+  from: string;
+  text: string;
+  contactName?: string;
+  messageId?: string;
+  timestamp?: Date;
+}
+
+export interface SyntheticTextResult {
+  stored: boolean;
+  duplicate: boolean;
+  processed: boolean;
+  inboundId?: string;
+  waMessageId: string;
 }
 
 /**
@@ -106,6 +122,63 @@ export class IngestionService {
       }
     }
     return { stored, duplicates };
+  }
+
+  async ingestSyntheticText(
+    input: SyntheticTextInput,
+  ): Promise<SyntheticTextResult> {
+    const timestamp = input.timestamp ?? new Date();
+    const waMessageId = input.messageId ?? `dev.${randomUUID()}`;
+    const msg: WaMessage = {
+      id: waMessageId,
+      from: input.from,
+      timestamp: Math.floor(timestamp.getTime() / 1000).toString(),
+      type: 'text',
+      text: { body: input.text },
+    };
+    const syntheticPayload: WaWebhookPayload = {
+      object: 'dev.whatsapp',
+      entry: [
+        {
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                contacts: [
+                  {
+                    wa_id: input.from,
+                    profile: input.contactName
+                      ? { name: input.contactName }
+                      : undefined,
+                  },
+                ],
+                messages: [msg],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const rawBody = Buffer.from(JSON.stringify(syntheticPayload));
+    const payloadHash = createHash('sha256').update(rawBody).digest('hex');
+    const saved = await this.storeIdempotent(msg, payloadHash);
+    if (!saved) {
+      return {
+        stored: false,
+        duplicate: true,
+        processed: false,
+        waMessageId,
+      };
+    }
+
+    const processed = await this.processMessage(saved.id, input.contactName);
+    return {
+      stored: true,
+      duplicate: false,
+      processed,
+      inboundId: saved.id,
+      waMessageId,
+    };
   }
 
   private async storeIdempotent(
