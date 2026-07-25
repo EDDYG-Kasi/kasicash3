@@ -10,6 +10,7 @@ exports.AppModule = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const typeorm_1 = require("@nestjs/typeorm");
+const app_controller_1 = require("./app.controller");
 const ledger_module_1 = require("./ledger/ledger.module");
 const ingestion_module_1 = require("./ingestion/ingestion.module");
 let AppModule = class AppModule {
@@ -38,6 +39,7 @@ exports.AppModule = AppModule = __decorate([
             ledger_module_1.LedgerModule,
             ingestion_module_1.IngestionModule,
         ],
+        controllers: [app_controller_1.AppController],
     })
 ], AppModule);
 //# sourceMappingURL=app.module.js.map

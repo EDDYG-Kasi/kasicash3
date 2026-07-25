@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AppController } from './app.controller';
 import { LedgerModule } from './ledger/ledger.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 
@@ -26,5 +27,6 @@ import { IngestionModule } from './ingestion/ingestion.module';
     LedgerModule,
     IngestionModule,
   ],
+  controllers: [AppController],
 })
 export class AppModule {}

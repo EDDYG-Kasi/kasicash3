@@ -11,6 +11,7 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const typeorm_1 = require("@nestjs/typeorm");
 const inbound_message_entity_1 = require("./entities/inbound-message.entity");
+const dev_controller_1 = require("./dev.controller");
 const whatsapp_controller_1 = require("./whatsapp.controller");
 const ingestion_service_1 = require("./ingestion.service");
 const recovery_service_1 = require("./recovery.service");
@@ -23,7 +24,7 @@ exports.IngestionModule = IngestionModule;
 exports.IngestionModule = IngestionModule = __decorate([
     (0, common_1.Module)({
         imports: [typeorm_1.TypeOrmModule.forFeature([inbound_message_entity_1.InboundMessage]), parsing_module_1.ParsingModule],
-        controllers: [whatsapp_controller_1.WhatsAppController],
+        controllers: [whatsapp_controller_1.WhatsAppController, dev_controller_1.DevController],
         providers: [
             ingestion_service_1.IngestionService,
             recovery_service_1.RecoveryService,

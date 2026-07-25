@@ -35,6 +35,20 @@ export interface WaWebhookPayload {
     object?: string;
     entry?: WaEntry[];
 }
+export interface SyntheticTextInput {
+    from: string;
+    text: string;
+    contactName?: string;
+    messageId?: string;
+    timestamp?: Date;
+}
+export interface SyntheticTextResult {
+    stored: boolean;
+    duplicate: boolean;
+    processed: boolean;
+    inboundId?: string;
+    waMessageId: string;
+}
 export declare class IngestionService {
     private dataSource;
     private onboarding;
@@ -46,6 +60,7 @@ export declare class IngestionService {
         stored: number;
         duplicates: number;
     }>;
+    ingestSyntheticText(input: SyntheticTextInput): Promise<SyntheticTextResult>;
     private storeIdempotent;
     processMessage(id: string, contactName?: string): Promise<boolean>;
     private recordFailure;

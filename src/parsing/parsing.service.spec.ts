@@ -20,6 +20,22 @@ describe('parseTransactionText', () => {
     });
   });
 
+  it('parses grouped Rand amounts and customer-paid sale language', () => {
+    expect(parseTransactionText('customer paid me R1,250.75')).toEqual({
+      kind: 'SALE',
+      amountMinor: '125075',
+      description: 'customer paid me R1,250.75',
+    });
+  });
+
+  it('keeps ambiguous transaction language out of the ledger', () => {
+    expect(parseTransactionText('received and spent R30')).toBeNull();
+  });
+
+  it('rejects malformed comma amounts instead of partially parsing them', () => {
+    expect(parseTransactionText('sold stock R12,34')).toBeNull();
+  });
+
   it('does not parse unsupported text or non-text messages', () => {
     expect(parseTransactionText('hello there')).toBeNull();
     expect(parseTransactionText('sold R30', 'image')).toBeNull();

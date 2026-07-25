@@ -62,6 +62,59 @@ let IngestionService = IngestionService_1 = class IngestionService {
         }
         return { stored, duplicates };
     }
+    async ingestSyntheticText(input) {
+        const timestamp = input.timestamp ?? new Date();
+        const waMessageId = input.messageId ?? `dev.${(0, crypto_1.randomUUID)()}`;
+        const msg = {
+            id: waMessageId,
+            from: input.from,
+            timestamp: Math.floor(timestamp.getTime() / 1000).toString(),
+            type: 'text',
+            text: { body: input.text },
+        };
+        const syntheticPayload = {
+            object: 'dev.whatsapp',
+            entry: [
+                {
+                    changes: [
+                        {
+                            field: 'messages',
+                            value: {
+                                contacts: [
+                                    {
+                                        wa_id: input.from,
+                                        profile: input.contactName
+                                            ? { name: input.contactName }
+                                            : undefined,
+                                    },
+                                ],
+                                messages: [msg],
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+        const rawBody = Buffer.from(JSON.stringify(syntheticPayload));
+        const payloadHash = (0, crypto_1.createHash)('sha256').update(rawBody).digest('hex');
+        const saved = await this.storeIdempotent(msg, payloadHash);
+        if (!saved) {
+            return {
+                stored: false,
+                duplicate: true,
+                processed: false,
+                waMessageId,
+            };
+        }
+        const processed = await this.processMessage(saved.id, input.contactName);
+        return {
+            stored: true,
+            duplicate: false,
+            processed,
+            inboundId: saved.id,
+            waMessageId,
+        };
+    }
     async storeIdempotent(msg, payloadHash) {
         try {
             const row = this.dataSource.manager.create(inbound_message_entity_1.InboundMessage, {

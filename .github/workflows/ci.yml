@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kasicash
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: kasicash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
+      - run: npm test
+      - run: npm run test:integration
+      - run: npm run migration:run
+      - run: npm run migration:revert
+      - run: npm run migration:run
+      - run: npm run migration:revert:all
+      - name: Assert full revert emptied the migrations table
+        env:
+          PGPASSWORD: postgres
+        run: |
+          remaining=$(psql -h localhost -U postgres -d kasicash -tAc \
+            "SELECT COALESCE((SELECT COUNT(*) FROM migrations), 0)" 2>/dev/null || echo 0)
+          echo "executed migrations remaining: $remaining"
+          test "$remaining" = "0"

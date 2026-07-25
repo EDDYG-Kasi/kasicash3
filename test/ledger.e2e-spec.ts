@@ -586,6 +586,7 @@ describe('Recovery worker (migrated schema)', () => {
     const service = new IngestionService(
       dataSource,
       new OnboardingService(dataSource),
+      new ParsingService(dataSource, new LedgerService(dataSource)),
       wa,
     );
 

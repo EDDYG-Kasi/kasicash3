@@ -18,6 +18,9 @@ const account_entity_1 = require("../ledger/entities/account.entity");
 const CASH_CODE = '100';
 const SALES_CODE = '400';
 const EXPENSES_CODE = '500';
+const MONEY_AMOUNT_SOURCE = '(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\\.[0-9]{1,2})?';
+const PREFIX_AMOUNT_PATTERN = new RegExp(`\\b(?:r|zar)\\s*(${MONEY_AMOUNT_SOURCE})(?![\\d,])`);
+const SUFFIX_AMOUNT_PATTERN = new RegExp(`\\b(${MONEY_AMOUNT_SOURCE})(?![\\d,])\\s*(?:rand|rands|zar)\\b`);
 let ParsingService = class ParsingService {
     dataSource;
     ledger;
@@ -119,17 +122,17 @@ function normalizeText(raw) {
         .trim();
 }
 function classifyKind(normalized) {
-    if (/\b(sold|sale|sales|received|income|earned)\b/.test(normalized)) {
-        return 'SALE';
-    }
-    if (/\b(spent|paid|bought|buy|expense|expenses)\b/.test(normalized)) {
-        return 'EXPENSE';
-    }
-    return null;
+    const paidToMe = /\bpaid\s+me\b|\b(customer|client)\s+paid\b/.test(normalized);
+    const sale = paidToMe || /\b(sold|sale|sales|received|income|earned)\b/.test(normalized);
+    const expense = /\b(spent|bought|buy|expense|expenses)\b/.test(normalized) ||
+        (/\bpaid\b/.test(normalized) && !paidToMe);
+    if (sale === expense)
+        return null;
+    return sale ? 'SALE' : 'EXPENSE';
 }
 function extractAmountMinor(normalized) {
-    const match = /\b(?:r|zar)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\b/.exec(normalized) ??
-        /\b([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(?:rand|rands|zar)\b/.exec(normalized);
+    const match = PREFIX_AMOUNT_PATTERN.exec(normalized) ??
+        SUFFIX_AMOUNT_PATTERN.exec(normalized);
     if (!match)
         return null;
     const raw = match[1].replace(/,/g, '');
