@@ -8,6 +8,7 @@ import { IngestionService } from './ingestion.service';
 import { RecoveryService } from './recovery.service';
 import { OnboardingService } from './onboarding.service';
 import { ParsingModule } from '../parsing/parsing.module';
+import { ConversationalQueryModule } from '../conversational-query/conversational-query.module';
 import {
   CloudApiWhatsAppClient,
   LoggingWhatsAppClient,
@@ -15,7 +16,11 @@ import {
 } from './whatsapp.client';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([InboundMessage]), ParsingModule],
+  imports: [
+    TypeOrmModule.forFeature([InboundMessage]),
+    ParsingModule,
+    ConversationalQueryModule,
+  ],
   controllers: [WhatsAppController, DevController],
   providers: [
     IngestionService,

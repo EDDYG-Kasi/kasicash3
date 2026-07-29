@@ -6,6 +6,7 @@ import { InboundMessage } from './entities/inbound-message.entity';
 import { OnboardingService } from './onboarding.service';
 import { WHATSAPP_CLIENT } from './whatsapp.client';
 import { ParsingService, ParseAndPostResult } from '../parsing/parsing.service';
+import { ConversationalQueryService } from '../conversational-query/conversational-query.service';
 
 // Minimal typing of the WhatsApp Cloud API webhook payload (only what we read).
 interface WaText {
@@ -83,6 +84,7 @@ export class IngestionService {
     private dataSource: DataSource,
     private onboarding: OnboardingService,
     private parsing: ParsingService,
+    private conversationalQueries: ConversationalQueryService,
     @Inject(WHATSAPP_CLIENT) private wa: WhatsAppClient,
   ) {}
 
@@ -242,15 +244,30 @@ export class IngestionService {
     try {
       const { business, created } =
         await this.onboarding.resolveOrCreateBusiness(waFrom, contactName);
-      const parseResult = await this.parsing.parseAndPost({
+      const queryResult = await this.conversationalQueries.handle({
         businessId: business.id,
-        waMessageId: message.wa_message_id,
-        payloadHash: message.payload_hash,
         textBody: message.text_body,
         messageType: message.message_type,
         waTimestamp: message.wa_timestamp,
-        receivedAt: message.received_at,
       });
+      if (queryResult.handled) {
+        replyBody = buildPlainReplyBody(
+          created,
+          business.name,
+          queryResult.replyBody,
+        );
+      } else {
+        const parseResult = await this.parsing.parseAndPost({
+          businessId: business.id,
+          waMessageId: message.wa_message_id,
+          payloadHash: message.payload_hash,
+          textBody: message.text_body,
+          messageType: message.message_type,
+          waTimestamp: message.wa_timestamp,
+          receivedAt: message.received_at,
+        });
+        replyBody = buildReplyBody(created, business.name, parseResult);
+      }
       await this.dataSource.manager.update(InboundMessage, id, {
         businessId: business.id,
         status: 'PROCESSED',
@@ -258,7 +275,6 @@ export class IngestionService {
         error: null,
         nextRetryAt: null,
       });
-      replyBody = buildReplyBody(created, business.name, parseResult);
     } catch (err) {
       await this.recordFailure(id, err);
       return true;
@@ -340,6 +356,17 @@ function buildReplyBody(
     return `${prefix}Recorded a ${label} of ${formatRand(parseResult.amountMinor)}.`;
   }
   return `${prefix}I couldn't confidently record that as a transaction yet. Try: "sold R30 airtime" or "spent R20 stock".`;
+}
+
+function buildPlainReplyBody(
+  created: boolean,
+  businessName: string,
+  replyBody: string,
+): string {
+  const prefix = created
+    ? `Welcome to KasiCash! Your business "${businessName}" is set up. `
+    : '';
+  return `${prefix}${replyBody}`;
 }
 
 function formatRand(amountMinor: string): string {

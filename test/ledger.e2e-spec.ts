@@ -15,6 +15,7 @@ import { RecoveryService } from '../src/ingestion/recovery.service';
 import { IngestionService } from '../src/ingestion/ingestion.service';
 import { OnboardingService } from '../src/ingestion/onboarding.service';
 import { ParsingService } from '../src/parsing/parsing.service';
+import { ConversationalQueryService } from '../src/conversational-query/conversational-query.service';
 import type { WhatsAppClient } from '../src/ingestion/whatsapp.client';
 import { CreateLedgerCore1699999999000 } from '../src/migrations/1699999999000-CreateLedgerCore';
 import { ImmutabilityTriggers1700000000000 } from '../src/migrations/1700000000000-ImmutabilityTriggers';
@@ -590,6 +591,7 @@ describe('Recovery worker (migrated schema)', () => {
       dataSource,
       new OnboardingService(dataSource),
       new ParsingService(dataSource, new LedgerService(dataSource)),
+      nonQueryService(),
       wa,
     );
 
@@ -626,6 +628,7 @@ describe('Recovery worker (migrated schema)', () => {
       dataSource,
       new OnboardingService(dataSource),
       new ParsingService(dataSource, new LedgerService(dataSource)),
+      nonQueryService(),
       wa,
     );
 
@@ -647,3 +650,12 @@ describe('Recovery worker (migrated schema)', () => {
     expect(replies[0]).toContain('Recorded a sale of R30.00');
   });
 });
+
+function nonQueryService(): ConversationalQueryService {
+  return {
+    handle: jest.fn().mockResolvedValue({
+      handled: false,
+      route: 'TRANSACTION',
+    }),
+  } as unknown as ConversationalQueryService;
+}

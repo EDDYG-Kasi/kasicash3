@@ -2,6 +2,10 @@
 
 Reflects the migrated PostgreSQL schema as of migration `1700000006000-ReportReadIndexes`.
 
+## Phase 5 Schema Note
+
+Phase 5 adds no tables, columns, triggers, or indexes. Conversational queries reuse the Phase 4 read-only report paths and the existing ledger/onboarding schema. No prior migration was edited.
+
 ## Reporting Addendum
 
 Phase 4 adds no report tables and no materialized cache. Reports read the legal ledger tables directly:

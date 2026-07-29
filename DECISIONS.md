@@ -10,3 +10,14 @@
 * **Timezone**: Callers pass an IANA timezone, defaulting to `Africa/Johannesburg` until businesses store timezone preferences. Local date ranges are converted to UTC bounds by the service.
 * **Indexes**: Migration `1700000006000-ReportReadIndexes` adds read indexes only. No prior ledger migration or invariant is modified.
 * **Consequences**: Reports are deterministic and traceable, but Phase 4 does not support cached dashboards, auth-bound access control, custom report types, or persisted per-business timezone settings. Those are deferred.
+
+## ADR 12: Phase 5 conversational queries resolve intent, never figures
+
+* **Date**: 2026-07-29
+* **Context**: Traders need to ask financial questions over WhatsApp, but free-text input is untrusted and must not bypass the immutable ledger or tenant boundaries. AI may help resolve intent, but it must not compute or invent financial facts.
+* **Decision**: Phase 5 adds a `ConversationalQueryModule` inside the existing durable ingestion path. Query-shaped inbound text is routed before Phase 3 parsing, resolved behind a mockable `CONVERSATIONAL_QUERY_RESOLVER` provider, validated against a per-business account allowlist, then answered only through Phase 4 `ReportsService` methods.
+* **Read-only guarantee**: The conversational query service imports no ledger writer service and calls no transaction creation APIs. It reads only the current business's accounts for validation, then calls read-only report methods.
+* **AI boundary**: Resolver output is treated as a proposal of `kind`, period, account hint, currency, and limit. The resolver may not provide tenant ids, account ids for another business, SQL, mutations, or final numbers. Replies render amounts only from report DTOs.
+* **Tenant scope**: `businessId` comes only from onboarding via `wa_from`. Message content cannot choose a tenant.
+* **Safety**: Prompt-injection-shaped query text is contained as out of scope and never falls through to Phase 3 transaction posting.
+* **Consequences**: The first implementation is deliberately narrow: cash, sales/expenses over a period, expense/stock spend, and recent account transactions. Multi-turn context, richer natural language, product-level analytics, and live model providers are deferred.

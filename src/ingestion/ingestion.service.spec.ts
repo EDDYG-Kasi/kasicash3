@@ -19,6 +19,7 @@ import {
 import { RecoveryService } from './recovery.service';
 import { OnboardingService } from './onboarding.service';
 import { ParsingService } from '../parsing/parsing.service';
+import { ConversationalQueryService } from '../conversational-query/conversational-query.service';
 
 describe('verifyWhatsAppSignature', () => {
   const secret = 'test-secret';
@@ -100,6 +101,7 @@ describe('IngestionService', () => {
     onboardingOverrides: any = {},
     parsingOverrides: any = {},
     queryImpl?: any,
+    conversationalOverrides: any = {},
   ) => {
     const query =
       queryImpl ??
@@ -137,14 +139,30 @@ describe('IngestionService', () => {
       parseAndPost: jest.fn().mockResolvedValue({ status: 'UNRECOGNIZED' }),
       ...parsingOverrides,
     } as unknown as ParsingService;
+    const conversationalQueries = {
+      handle: jest.fn().mockResolvedValue({
+        handled: false,
+        route: 'TRANSACTION',
+      }),
+      ...conversationalOverrides,
+    } as unknown as ConversationalQueryService;
     const wa = { sendText: jest.fn().mockResolvedValue(undefined) };
     const service = new IngestionService(
       { manager, query } as any,
       onboarding,
       parsing,
+      conversationalQueries,
       wa,
     );
-    return { service, manager, onboarding, parsing, wa, query };
+    return {
+      service,
+      manager,
+      onboarding,
+      parsing,
+      conversationalQueries,
+      wa,
+      query,
+    };
   };
 
   const payload: WaWebhookPayload = {
@@ -364,6 +382,46 @@ describe('IngestionService', () => {
     expect(wa.sendText).toHaveBeenCalledWith(
       '27831234567',
       'Recorded a sale of R30.00.',
+    );
+  });
+
+  it('answers a conversational query without invoking the transaction parser', async () => {
+    const { service, manager, parsing, conversationalQueries, wa } =
+      makeService(
+        {},
+        {
+          resolveOrCreateBusiness: jest.fn().mockResolvedValue({
+            business: { id: 'b-1', name: 'Trader 27831234567' },
+            created: false,
+          }),
+        },
+        {},
+        undefined,
+        {
+          handle: jest.fn().mockResolvedValue({
+            handled: true,
+            replyBody: 'You have ZAR 75.00 cash right now.',
+          }),
+        },
+      );
+
+    await service.processMessage('im-1');
+
+    expect((conversationalQueries as any).handle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: 'b-1',
+        textBody: 'sold 3 chips R30',
+      }),
+    );
+    expect((parsing as any).parseAndPost).not.toHaveBeenCalled();
+    expect(manager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      'im-1',
+      expect.objectContaining({ status: 'PROCESSED', businessId: 'b-1' }),
+    );
+    expect(wa.sendText).toHaveBeenCalledWith(
+      '27831234567',
+      'You have ZAR 75.00 cash right now.',
     );
   });
 
