@@ -23,6 +23,7 @@ import { PostingLifecycle1700000002000 } from '../src/migrations/1700000002000-P
 import { LedgerHardening1700000003000 } from '../src/migrations/1700000003000-LedgerHardening';
 import { InboundMessages1700000004000 } from '../src/migrations/1700000004000-InboundMessages';
 import { InboundRetryColumns1700000005000 } from '../src/migrations/1700000005000-InboundRetryColumns';
+import { ReportReadIndexes1700000006000 } from '../src/migrations/1700000006000-ReportReadIndexes';
 
 describe('Ledger Integration (migrated PostgreSQL schema)', () => {
   let container: StartedPostgreSqlContainer;
@@ -80,6 +81,7 @@ describe('Ledger Integration (migrated PostgreSQL schema)', () => {
         LedgerHardening1700000003000,
         InboundMessages1700000004000,
         InboundRetryColumns1700000005000,
+        ReportReadIndexes1700000006000,
       ],
       synchronize: false, // Prove the real migration path, not entity sync.
     });
@@ -491,6 +493,7 @@ describe('Recovery worker (migrated schema)', () => {
         LedgerHardening1700000003000,
         InboundMessages1700000004000,
         InboundRetryColumns1700000005000,
+        ReportReadIndexes1700000006000,
       ],
       synchronize: false,
     });

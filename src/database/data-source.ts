@@ -11,6 +11,7 @@ import { PostingLifecycle1700000002000 } from '../migrations/1700000002000-Posti
 import { LedgerHardening1700000003000 } from '../migrations/1700000003000-LedgerHardening';
 import { InboundMessages1700000004000 } from '../migrations/1700000004000-InboundMessages';
 import { InboundRetryColumns1700000005000 } from '../migrations/1700000005000-InboundRetryColumns';
+import { ReportReadIndexes1700000006000 } from '../migrations/1700000006000-ReportReadIndexes';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -28,6 +29,7 @@ export const AppDataSource = new DataSource({
     LedgerHardening1700000003000,
     InboundMessages1700000004000,
     InboundRetryColumns1700000005000,
+    ReportReadIndexes1700000006000,
   ],
   synchronize: false,
 });
