@@ -2,7 +2,7 @@
 
 1. Phase 1: Data model and immutable ledger core — complete.
 2. Phase 2: WhatsApp ingestion and onboarding — complete, with delivery-status handling deferred.
-3. Phase 3: Deterministic transaction parsing — started.
+3. Phase 3: Deterministic transaction parsing with explicit confirmation — implemented locally, pending green CI.
 4. Phase 4: Core reports — complete, pending green CI.
 5. Phase 5: Conversational queries — implemented locally, pending green CI.
 6. Phase 6: Visual analytics.
@@ -16,7 +16,7 @@
 - Materialized or cached reports.
 - More report types and richer analytics.
 - Per-business timezone/preferences.
-- Auth/access control for report routes.
+- Auth/access control for production report APIs. Raw report routes are disabled by default until this exists.
 
 ## Phase 5 Deferred
 

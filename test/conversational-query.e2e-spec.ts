@@ -9,6 +9,7 @@ import { Entry } from '../src/ledger/entities/entry.entity';
 import { Transaction } from '../src/ledger/entities/transaction.entity';
 import { LedgerService } from '../src/ledger/ledger.service';
 import { InboundMessage } from '../src/ingestion/entities/inbound-message.entity';
+import { TransactionProposal } from '../src/parsing/entities/transaction-proposal.entity';
 import { IngestionService } from '../src/ingestion/ingestion.service';
 import { OnboardingService } from '../src/ingestion/onboarding.service';
 import { ParsingService } from '../src/parsing/parsing.service';
@@ -23,6 +24,7 @@ import { LedgerHardening1700000003000 } from '../src/migrations/1700000003000-Le
 import { InboundMessages1700000004000 } from '../src/migrations/1700000004000-InboundMessages';
 import { InboundRetryColumns1700000005000 } from '../src/migrations/1700000005000-InboundRetryColumns';
 import { ReportReadIndexes1700000006000 } from '../src/migrations/1700000006000-ReportReadIndexes';
+import { TransactionProposals1700000007000 } from '../src/migrations/1700000007000-TransactionProposals';
 
 describe('Conversational queries integration', () => {
   const waFrom = '27830000001';
@@ -44,7 +46,14 @@ describe('Conversational queries integration', () => {
       username: container.getUsername(),
       password: container.getPassword(),
       database: container.getDatabase(),
-      entities: [Business, Account, Transaction, Entry, InboundMessage],
+      entities: [
+        Business,
+        Account,
+        Transaction,
+        Entry,
+        InboundMessage,
+        TransactionProposal,
+      ],
       migrations: [
         CreateLedgerCore1699999999000,
         ImmutabilityTriggers1700000000000,
@@ -54,6 +63,7 @@ describe('Conversational queries integration', () => {
         InboundMessages1700000004000,
         InboundRetryColumns1700000005000,
         ReportReadIndexes1700000006000,
+        TransactionProposals1700000007000,
       ],
       synchronize: false,
     });

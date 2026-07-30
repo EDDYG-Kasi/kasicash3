@@ -1,5 +1,21 @@
 # Architecture Decision Records
 
+## ADR 13: Phase 3 parsed transactions require explicit confirmation
+
+* **Date**: 2026-07-30
+* **Context**: The engineering constitution requires AI/parsing to propose and a human to confirm before any ledger write. The earlier parser posted recognized WhatsApp transaction text immediately, which made the parser a ledger-write trigger instead of a proposal producer.
+* **Decision**: Parsed WhatsApp transaction text now creates a durable `transaction_proposals` row with status `PENDING`. A later explicit confirmation message (`YES`, `confirm`, etc.) from the same `wa_from`-resolved business is required before `LedgerService.postTransaction` is called. Cancellation messages mark the pending proposal `CANCELLED`.
+* **Idempotency**: The proposal source message is unique per business, and the ledger post uses `proposal:{proposal_id}` as its idempotency key. If a confirmation retry races or repeats after posting, the proposal's confirmed message id and transaction id make the response idempotent without creating another transaction.
+* **Tenant scope**: Confirmation lookup is by server-resolved `business_id`; message content cannot confirm or post a proposal for another tenant.
+* **Consequences**: One-message auto-posting is intentionally removed. This costs one extra WhatsApp turn but restores the legal-record boundary: parser proposes, user confirms, trusted ledger code posts.
+
+## ADR 14: Raw HTTP report routes are disabled by default
+
+* **Date**: 2026-07-30
+* **Context**: `ReportsService` is correctly tenant-scoped and read-only, but exposing report controllers that accept a caller-supplied `businessId` is not trusted server-side tenant context. The production product is WhatsApp-driven; Phase 5 obtains tenant identity from `wa_from`.
+* **Decision**: The `/reports/*` controller is disabled unless `KASICASH_REPORT_ROUTES=true` is set deliberately for controlled environments. Phase 5 continues to use `ReportsService` internally with the business id resolved from WhatsApp onboarding.
+* **Consequences**: Direct report URLs are no longer a default supported production surface. Auth-bound report APIs remain deferred work.
+
 ## ADR 11: Phase 4 reports are read-only ledger aggregations
 
 * **Date**: 2026-07-29

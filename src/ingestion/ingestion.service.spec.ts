@@ -347,7 +347,7 @@ describe('IngestionService', () => {
     );
   });
 
-  it('posts a parsed transaction before marking the inbound message PROCESSED', async () => {
+  it('records a confirmed parsed transaction before marking the inbound message PROCESSED', async () => {
     const { service, manager, parsing, wa } = makeService(
       {},
       {
@@ -382,6 +382,37 @@ describe('IngestionService', () => {
     expect(wa.sendText).toHaveBeenCalledWith(
       '27831234567',
       'Recorded a sale of R30.00.',
+    );
+  });
+
+  it('sends a confirmation prompt for parsed transaction proposals', async () => {
+    const { service, manager, wa } = makeService(
+      {},
+      {
+        resolveOrCreateBusiness: jest.fn().mockResolvedValue({
+          business: { id: 'b-1', name: 'Trader 27831234567' },
+          created: false,
+        }),
+      },
+      {
+        parseAndPost: jest.fn().mockResolvedValue({
+          status: 'PROPOSED',
+          kind: 'SALE',
+          amountMinor: '3000',
+          proposalId: 'proposal-1',
+        }),
+      },
+    );
+    await service.processMessage('im-1');
+
+    expect(manager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      'im-1',
+      expect.objectContaining({ status: 'PROCESSED', businessId: 'b-1' }),
+    );
+    expect(wa.sendText).toHaveBeenCalledWith(
+      '27831234567',
+      'I think this is a sale of R30.00. Reply YES to record it, or NO to cancel.',
     );
   });
 

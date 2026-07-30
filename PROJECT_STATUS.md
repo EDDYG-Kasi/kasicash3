@@ -1,6 +1,6 @@
 # Project Status
 
-**Current Phase:** Phase 5 implemented locally, pending full green CI.
+**Current Phase:** Phase 5 implemented with constitution hardening, pending full green CI.
 
 ## Phase 4 Delivered
 
@@ -14,9 +14,9 @@
 
 ## Validation
 
-- Local `npm run build` passed on 2026-07-29.
-- Local `npm run lint` passed on 2026-07-29.
-- Local `npm test -- --runInBand` passed on 2026-07-29.
+- Local `npm run build` passed on 2026-07-30.
+- Local `npm run lint` passed on 2026-07-30.
+- Local `npm test -- --runInBand` passed on 2026-07-30: 8 suites, 77 tests.
 - Local `npm run test:integration` is blocked because this environment cannot find a working Docker/Testcontainers runtime.
 - GitHub Actions should run the full suite after push.
 
@@ -30,3 +30,10 @@
 - Replies render only figures returned by Phase 4 `ReportsService`; resolver output never contains final financial numbers.
 - Prompt-injection containment for cross-tenant, induced-write, scope-widening, and fabricated-number attempts.
 - Unit and Testcontainers integration coverage added.
+
+## Constitution Hardening Delivered
+
+- Phase 3 no longer posts parsed WhatsApp transaction text immediately.
+- Parsed transaction text creates a durable `transaction_proposals` row and asks the trader to reply YES/NO.
+- Only a later explicit confirmation from the same `wa_from`-resolved business calls `LedgerService.postTransaction`.
+- Raw HTTP report routes are disabled by default so production report reads do not accept untrusted caller-selected tenant ids.

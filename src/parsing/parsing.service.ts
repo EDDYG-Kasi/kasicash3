@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DataSource, In } from 'typeorm';
 import { LedgerService } from '../ledger/ledger.service';
 import { Account } from '../ledger/entities/account.entity';
+import { TransactionProposal } from './entities/transaction-proposal.entity';
 
 export interface ParseAndPostInput {
   businessId: string;
@@ -15,6 +16,19 @@ export interface ParseAndPostInput {
 
 export type ParseAndPostResult =
   | { status: 'UNRECOGNIZED' }
+  | { status: 'NO_PENDING_CONFIRMATION' }
+  | {
+      status: 'PROPOSED';
+      kind: ParsedTransactionKind;
+      amountMinor: string;
+      proposalId: string;
+    }
+  | {
+      status: 'CANCELLED';
+      kind: ParsedTransactionKind;
+      amountMinor: string;
+      proposalId: string;
+    }
   | {
       status: 'POSTED';
       kind: ParsedTransactionKind;
@@ -33,6 +47,7 @@ interface ParsedTransaction {
 const CASH_CODE = '100';
 const SALES_CODE = '400';
 const EXPENSES_CODE = '500';
+const DEFAULT_CURRENCY = 'ZAR';
 const MONEY_AMOUNT_SOURCE =
   '(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\\.[0-9]{1,2})?';
 const PREFIX_AMOUNT_PATTERN = new RegExp(
@@ -50,56 +65,129 @@ export class ParsingService {
   ) {}
 
   async parseAndPost(input: ParseAndPostInput): Promise<ParseAndPostResult> {
+    if (isCancelText(input.textBody, input.messageType)) {
+      return this.cancelPendingProposal(input.businessId);
+    }
+    if (isConfirmText(input.textBody, input.messageType)) {
+      return this.confirmPendingProposal(input);
+    }
+
     const parsed = parseTransactionText(input.textBody, input.messageType);
     if (!parsed) return { status: 'UNRECOGNIZED' };
 
-    const accounts = await this.loadSeedAccounts(input.businessId);
-    const amountMinor = parsed.amountMinor;
-    const entries =
-      parsed.kind === 'SALE'
-        ? [
-            {
-              accountId: accounts.cash.id,
-              amountMinor,
-              type: 'DEBIT' as const,
-            },
-            {
-              accountId: accounts.sales.id,
-              amountMinor,
-              type: 'CREDIT' as const,
-            },
-          ]
-        : [
-            {
-              accountId: accounts.expenses.id,
-              amountMinor,
-              type: 'DEBIT' as const,
-            },
-            {
-              accountId: accounts.cash.id,
-              amountMinor,
-              type: 'CREDIT' as const,
-            },
-          ];
+    const existing = await this.dataSource.manager.findOne(
+      TransactionProposal,
+      {
+        where: {
+          businessId: input.businessId,
+          sourceWaMessageId: input.waMessageId,
+        },
+      },
+    );
+    if (existing) return proposalResult(existing);
 
+    await this.dataSource.manager.update(
+      TransactionProposal,
+      { businessId: input.businessId, status: 'PENDING' },
+      { status: 'CANCELLED' },
+    );
+
+    const proposal = await this.dataSource.manager.save(
+      this.dataSource.manager.create(TransactionProposal, {
+        businessId: input.businessId,
+        sourceWaMessageId: input.waMessageId,
+        sourcePayloadHash: input.payloadHash,
+        kind: parsed.kind,
+        amountMinor: parsed.amountMinor,
+        currency: DEFAULT_CURRENCY,
+        description: parsed.description,
+        waTimestamp: input.waTimestamp,
+        receivedAt: input.receivedAt,
+        status: 'PENDING',
+      }),
+    );
+
+    return {
+      status: 'PROPOSED',
+      kind: parsed.kind,
+      amountMinor: parsed.amountMinor,
+      proposalId: proposal.id,
+    };
+  }
+
+  private async confirmPendingProposal(
+    input: ParseAndPostInput,
+  ): Promise<ParseAndPostResult> {
+    const alreadyConfirmed = await this.dataSource.manager.findOne(
+      TransactionProposal,
+      {
+        where: {
+          businessId: input.businessId,
+          confirmedByWaMessageId: input.waMessageId,
+        },
+      },
+    );
+    if (alreadyConfirmed) return proposalResult(alreadyConfirmed);
+
+    const proposal = await this.dataSource.manager.findOne(
+      TransactionProposal,
+      {
+        where: { businessId: input.businessId, status: 'PENDING' },
+        order: { createdAt: 'DESC' },
+      },
+    );
+    if (!proposal) return { status: 'NO_PENDING_CONFIRMATION' };
+
+    const accounts = await this.loadSeedAccounts(input.businessId);
     const transaction = await this.ledger.postTransaction({
       businessId: input.businessId,
-      description: parsed.description,
-      currency: 'ZAR',
-      idempotencyKey: `wa:${input.waMessageId}`,
+      description: proposal.description,
+      currency: proposal.currency,
+      idempotencyKey: `proposal:${proposal.id}`,
       sourceType: 'WHATSAPP',
-      sourceMessageId: input.waMessageId,
-      sourcePayloadHash: input.payloadHash,
-      occurredAt: input.waTimestamp,
-      receivedAt: input.receivedAt,
-      entries,
+      sourceMessageId: proposal.sourceWaMessageId,
+      sourcePayloadHash: proposal.sourcePayloadHash,
+      occurredAt: proposal.waTimestamp,
+      receivedAt: proposal.receivedAt,
+      entries: buildEntries(proposal.kind as ParsedTransactionKind, accounts, {
+        amountMinor: proposal.amountMinor,
+      }),
+    });
+
+    await this.dataSource.manager.update(TransactionProposal, proposal.id, {
+      status: 'CONFIRMED',
+      confirmedByWaMessageId: input.waMessageId,
+      transactionId: transaction.id,
     });
 
     return {
       status: 'POSTED',
-      kind: parsed.kind,
-      amountMinor,
+      kind: proposal.kind as ParsedTransactionKind,
+      amountMinor: proposal.amountMinor,
       transactionId: transaction.id,
+    };
+  }
+
+  private async cancelPendingProposal(
+    businessId: string,
+  ): Promise<ParseAndPostResult> {
+    const proposal = await this.dataSource.manager.findOne(
+      TransactionProposal,
+      {
+        where: { businessId, status: 'PENDING' },
+        order: { createdAt: 'DESC' },
+      },
+    );
+    if (!proposal) return { status: 'NO_PENDING_CONFIRMATION' };
+
+    await this.dataSource.manager.update(TransactionProposal, proposal.id, {
+      status: 'CANCELLED',
+    });
+    return {
+      status: 'CANCELLED',
+      kind: proposal.kind as ParsedTransactionKind,
+      amountMinor: proposal.amountMinor,
+      proposalId: proposal.id,
     };
   }
 
@@ -120,6 +208,64 @@ export class ParsingService {
     }
     return { cash, sales, expenses };
   }
+}
+
+function buildEntries(
+  kind: ParsedTransactionKind,
+  accounts: { cash: Account; sales: Account; expenses: Account },
+  parsed: Pick<ParsedTransaction, 'amountMinor'>,
+) {
+  const amountMinor = parsed.amountMinor;
+  return kind === 'SALE'
+    ? [
+        {
+          accountId: accounts.cash.id,
+          amountMinor,
+          type: 'DEBIT' as const,
+        },
+        {
+          accountId: accounts.sales.id,
+          amountMinor,
+          type: 'CREDIT' as const,
+        },
+      ]
+    : [
+        {
+          accountId: accounts.expenses.id,
+          amountMinor,
+          type: 'DEBIT' as const,
+        },
+        {
+          accountId: accounts.cash.id,
+          amountMinor,
+          type: 'CREDIT' as const,
+        },
+      ];
+}
+
+function proposalResult(proposal: TransactionProposal): ParseAndPostResult {
+  if (proposal.status === 'CONFIRMED' && proposal.transactionId) {
+    return {
+      status: 'POSTED',
+      kind: proposal.kind as ParsedTransactionKind,
+      amountMinor: proposal.amountMinor,
+      transactionId: proposal.transactionId,
+    };
+  }
+  if (proposal.status === 'CANCELLED') {
+    return {
+      status: 'CANCELLED',
+      kind: proposal.kind as ParsedTransactionKind,
+      amountMinor: proposal.amountMinor,
+      proposalId: proposal.id,
+    };
+  }
+  return {
+    status: 'PROPOSED',
+    kind: proposal.kind as ParsedTransactionKind,
+    amountMinor: proposal.amountMinor,
+    proposalId: proposal.id,
+  };
 }
 
 export function parseTransactionText(
@@ -147,6 +293,23 @@ function normalizeText(raw: string): string {
     .replace(/[^\p{L}\p{N}.,\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function isConfirmText(
+  textBody?: string | null,
+  messageType = 'text',
+): boolean {
+  if (messageType !== 'text' || !textBody) return false;
+  return /^(yes|y|confirm|confirmed|ok|okay|record it|post it)$/i.test(
+    textBody.trim(),
+  );
+}
+
+function isCancelText(textBody?: string | null, messageType = 'text'): boolean {
+  if (messageType !== 'text' || !textBody) return false;
+  return /^(no|n|cancel|stop|discard|don't record|do not record)$/i.test(
+    textBody.trim(),
+  );
 }
 
 function classifyKind(normalized: string): ParsedTransactionKind | null {

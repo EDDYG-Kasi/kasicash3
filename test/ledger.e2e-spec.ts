@@ -11,6 +11,7 @@ import { Account, AccountType } from '../src/ledger/entities/account.entity';
 import { Transaction } from '../src/ledger/entities/transaction.entity';
 import { Entry } from '../src/ledger/entities/entry.entity';
 import { InboundMessage } from '../src/ingestion/entities/inbound-message.entity';
+import { TransactionProposal } from '../src/parsing/entities/transaction-proposal.entity';
 import { RecoveryService } from '../src/ingestion/recovery.service';
 import { IngestionService } from '../src/ingestion/ingestion.service';
 import { OnboardingService } from '../src/ingestion/onboarding.service';
@@ -25,6 +26,7 @@ import { LedgerHardening1700000003000 } from '../src/migrations/1700000003000-Le
 import { InboundMessages1700000004000 } from '../src/migrations/1700000004000-InboundMessages';
 import { InboundRetryColumns1700000005000 } from '../src/migrations/1700000005000-InboundRetryColumns';
 import { ReportReadIndexes1700000006000 } from '../src/migrations/1700000006000-ReportReadIndexes';
+import { TransactionProposals1700000007000 } from '../src/migrations/1700000007000-TransactionProposals';
 
 describe('Ledger Integration (migrated PostgreSQL schema)', () => {
   let container: StartedPostgreSqlContainer;
@@ -73,7 +75,14 @@ describe('Ledger Integration (migrated PostgreSQL schema)', () => {
       username: container.getUsername(),
       password: container.getPassword(),
       database: container.getDatabase(),
-      entities: [Business, Account, Transaction, Entry, InboundMessage],
+      entities: [
+        Business,
+        Account,
+        Transaction,
+        Entry,
+        InboundMessage,
+        TransactionProposal,
+      ],
       migrations: [
         CreateLedgerCore1699999999000,
         ImmutabilityTriggers1700000000000,
@@ -83,6 +92,7 @@ describe('Ledger Integration (migrated PostgreSQL schema)', () => {
         InboundMessages1700000004000,
         InboundRetryColumns1700000005000,
         ReportReadIndexes1700000006000,
+        TransactionProposals1700000007000,
       ],
       synchronize: false, // Prove the real migration path, not entity sync.
     });
@@ -485,7 +495,14 @@ describe('Recovery worker (migrated schema)', () => {
       username: container.getUsername(),
       password: container.getPassword(),
       database: container.getDatabase(),
-      entities: [Business, Account, Transaction, Entry, InboundMessage],
+      entities: [
+        Business,
+        Account,
+        Transaction,
+        Entry,
+        InboundMessage,
+        TransactionProposal,
+      ],
       migrations: [
         CreateLedgerCore1699999999000,
         ImmutabilityTriggers1700000000000,
@@ -495,6 +512,7 @@ describe('Recovery worker (migrated schema)', () => {
         InboundMessages1700000004000,
         InboundRetryColumns1700000005000,
         ReportReadIndexes1700000006000,
+        TransactionProposals1700000007000,
       ],
       synchronize: false,
     });
@@ -607,7 +625,7 @@ describe('Recovery worker (migrated schema)', () => {
     expect(sends).toBe(1); // exactly one reply, not two
   });
 
-  it('parses a simple WhatsApp sale and posts it to the ledger', async () => {
+  it('proposes a simple WhatsApp sale and posts it only after confirmation', async () => {
     const phone = '27839990000';
     const stored = await insert({
       status: 'RECEIVED',
@@ -634,6 +652,41 @@ describe('Recovery worker (migrated schema)', () => {
 
     await service.processMessage(stored.id, 'Phase 3 Trader');
 
+    const proposedInbound = await dataSource.manager.findOneOrFail(
+      InboundMessage,
+      {
+        where: { id: stored.id },
+      },
+    );
+    const proposal = await dataSource.manager.findOneOrFail(
+      TransactionProposal,
+      {
+        where: {
+          businessId: proposedInbound.businessId,
+          sourceWaMessageId: 'wamid-phase3-sale',
+        },
+      },
+    );
+
+    expect(proposedInbound.status).toBe('PROCESSED');
+    expect(proposal.status).toBe('PENDING');
+    expect(replies[0]).toContain('Reply YES to record it');
+    await expect(
+      dataSource.manager.findOne(Transaction, {
+        where: { sourceMessageId: 'wamid-phase3-sale' },
+      }),
+    ).resolves.toBeNull();
+
+    const confirm = await insert({
+      status: 'RECEIVED',
+      waMessageId: 'wamid-phase3-confirm',
+      waFrom: phone,
+      payloadHash: 'phase3-confirm-hash',
+      textBody: 'YES',
+    });
+
+    await service.processMessage(confirm.id);
+
     const inbound = await dataSource.manager.findOneOrFail(InboundMessage, {
       where: { id: stored.id },
     });
@@ -647,7 +700,16 @@ describe('Recovery worker (migrated schema)', () => {
     expect(tx.sourceType).toBe('WHATSAPP');
     expect(tx.sourcePayloadHash).toBe('phase3-hash-1');
     expect(tx.entries).toHaveLength(2);
-    expect(replies[0]).toContain('Recorded a sale of R30.00');
+    await expect(
+      dataSource.manager.findOneOrFail(TransactionProposal, {
+        where: { id: proposal.id },
+      }),
+    ).resolves.toMatchObject({
+      status: 'CONFIRMED',
+      confirmedByWaMessageId: 'wamid-phase3-confirm',
+      transactionId: tx.id,
+    });
+    expect(replies.at(-1)).toContain('Recorded a sale of R30.00');
   });
 });
 

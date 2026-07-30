@@ -355,6 +355,16 @@ function buildReplyBody(
     const label = parseResult.kind === 'SALE' ? 'sale' : 'expense';
     return `${prefix}Recorded a ${label} of ${formatRand(parseResult.amountMinor)}.`;
   }
+  if (parseResult.status === 'PROPOSED') {
+    const label = parseResult.kind === 'SALE' ? 'sale' : 'expense';
+    return `${prefix}I think this is a ${label} of ${formatRand(parseResult.amountMinor)}. Reply YES to record it, or NO to cancel.`;
+  }
+  if (parseResult.status === 'CANCELLED') {
+    return `${prefix}Okay, I cancelled that unconfirmed ${parseResult.kind === 'SALE' ? 'sale' : 'expense'}.`;
+  }
+  if (parseResult.status === 'NO_PENDING_CONFIRMATION') {
+    return `${prefix}I don't have an unconfirmed transaction waiting. Send something like "sold R30 airtime" first.`;
+  }
   return `${prefix}I couldn't confidently record that as a transaction yet. Try: "sold R30 airtime" or "spent R20 stock".`;
 }
 

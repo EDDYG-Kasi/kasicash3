@@ -1,10 +1,12 @@
 import {
   BadRequestException,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Query,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ReportsService } from './reports.service';
 
 interface CashPositionQuery {
@@ -24,15 +26,19 @@ interface StatementQuery extends PeriodQuery {
 }
 
 /**
- * Phase 4 read-only report routes. These are intentionally unauthenticated for
- * now; auth/access control is deferred to Phase 9.
+ * Phase 4 read-only report routes. Disabled by default: the constitution does
+ * not permit tenant selection from untrusted request input in production.
  */
 @Controller('reports')
 export class ReportsController {
-  constructor(private readonly reports: ReportsService) {}
+  constructor(
+    private readonly reports: ReportsService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Get('balances')
   getCashPosition(@Query() query: CashPositionQuery) {
+    this.assertReportRoutesEnabled();
     return this.reports.getCashPosition({
       businessId: requireQuery(query.businessId, 'businessId'),
       currency: query.currency,
@@ -41,6 +47,7 @@ export class ReportsController {
 
   @Get('income-statement')
   getIncomeStatement(@Query() query: PeriodQuery) {
+    this.assertReportRoutesEnabled();
     return this.reports.getIncomeStatement({
       businessId: requireQuery(query.businessId, 'businessId'),
       from: requireQuery(query.from, 'from'),
@@ -55,6 +62,7 @@ export class ReportsController {
     @Param('accountId') accountId: string,
     @Query() query: StatementQuery,
   ) {
+    this.assertReportRoutesEnabled();
     return this.reports.getAccountStatement({
       businessId: requireQuery(query.businessId, 'businessId'),
       accountId,
@@ -65,6 +73,12 @@ export class ReportsController {
       limit: query.limit === undefined ? undefined : Number(query.limit),
       offset: query.offset === undefined ? undefined : Number(query.offset),
     });
+  }
+
+  private assertReportRoutesEnabled(): void {
+    if (this.config.get<string>('KASICASH_REPORT_ROUTES') !== 'true') {
+      throw new ForbiddenException('Report routes are disabled');
+    }
   }
 }
 
