@@ -18,13 +18,13 @@ async function main(): Promise<void> {
       await AppDataSource.undoLastMigration();
     }
   } else {
-    await AppDataSource.runMigrations();
+    await AppDataSource.runMigrations({ transaction: 'each' });
   }
   await AppDataSource.destroy();
   console.log(`migration ${command} complete`);
 }
 
-main().catch((err) => {
-  console.error(err);
+main().catch(() => {
+  console.error('migration failed error_code=MIGRATION_OPERATION_FAILED');
   process.exit(1);
 });

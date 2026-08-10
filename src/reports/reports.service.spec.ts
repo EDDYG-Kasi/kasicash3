@@ -51,4 +51,24 @@ describe('ReportsService', () => {
     expect(commitTransaction).toHaveBeenCalled();
     expect(report.netCash.amountMinor).toBe('7500');
   });
+
+  it('rejects oversized offsets before opening a read transaction', async () => {
+    const createQueryRunner = jest.fn();
+    const service = new ReportsService({
+      createQueryRunner,
+    } as unknown as DataSource);
+
+    await expect(
+      service.getAccountStatement({
+        businessId: 'b-1',
+        accountId: 'a-1',
+        from: '2026-01-01',
+        to: '2026-01-31',
+        timezone: 'UTC',
+        currency: 'ZAR',
+        offset: 10_001,
+      }),
+    ).rejects.toThrow('offset must be an integer from 0 to 10000');
+    expect(createQueryRunner).not.toHaveBeenCalled();
+  });
 });

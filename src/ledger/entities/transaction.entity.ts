@@ -38,15 +38,15 @@ export class Transaction {
   @Column({ name: 'source_payload_hash', nullable: true, type: 'varchar' })
   sourcePayloadHash: string;
 
-  @Column({ name: 'occurred_at', type: 'timestamp' })
+  @Column({ name: 'occurred_at', type: 'timestamptz' })
   occurredAt: Date;
 
-  @Column({ name: 'received_at', type: 'timestamp' })
+  @Column({ name: 'received_at', type: 'timestamptz' })
   receivedAt: Date;
 
   @Column({
     name: 'posted_at',
-    type: 'timestamp',
+    type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',
   })
   postedAt: Date;
@@ -69,7 +69,7 @@ export class Transaction {
   @Column({ name: 'business_id', type: 'uuid' })
   businessId: string;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
   @OneToMany(() => Entry, (entry) => entry.transaction)

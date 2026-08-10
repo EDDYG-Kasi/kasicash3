@@ -4,27 +4,18 @@ import {
 } from '@testcontainers/postgresql';
 import { DataSource } from 'typeorm';
 import { Account, AccountType } from '../src/ledger/entities/account.entity';
-import { Business } from '../src/ledger/entities/business.entity';
-import { Entry } from '../src/ledger/entities/entry.entity';
 import { Transaction } from '../src/ledger/entities/transaction.entity';
 import { LedgerService } from '../src/ledger/ledger.service';
-import { InboundMessage } from '../src/ingestion/entities/inbound-message.entity';
-import { TransactionProposal } from '../src/parsing/entities/transaction-proposal.entity';
 import { IngestionService } from '../src/ingestion/ingestion.service';
 import { OnboardingService } from '../src/ingestion/onboarding.service';
 import { ParsingService } from '../src/parsing/parsing.service';
 import { ReportsService } from '../src/reports/reports.service';
 import { ConversationalQueryService } from '../src/conversational-query/conversational-query.service';
 import { HeuristicConversationalQueryResolver } from '../src/conversational-query/conversational-query.resolver';
-import { CreateLedgerCore1699999999000 } from '../src/migrations/1699999999000-CreateLedgerCore';
-import { ImmutabilityTriggers1700000000000 } from '../src/migrations/1700000000000-ImmutabilityTriggers';
-import { TenantConsistencyAndPolicies1700000001000 } from '../src/migrations/1700000001000-TenantConsistencyAndPolicies';
-import { PostingLifecycle1700000002000 } from '../src/migrations/1700000002000-PostingLifecycle';
-import { LedgerHardening1700000003000 } from '../src/migrations/1700000003000-LedgerHardening';
-import { InboundMessages1700000004000 } from '../src/migrations/1700000004000-InboundMessages';
-import { InboundRetryColumns1700000005000 } from '../src/migrations/1700000005000-InboundRetryColumns';
-import { ReportReadIndexes1700000006000 } from '../src/migrations/1700000006000-ReportReadIndexes';
-import { TransactionProposals1700000007000 } from '../src/migrations/1700000007000-TransactionProposals';
+import {
+  KASICASH_ENTITIES,
+  KASICASH_MIGRATIONS,
+} from '../src/database/database-options';
 
 describe('Conversational queries integration', () => {
   const waFrom = '27830000001';
@@ -46,25 +37,8 @@ describe('Conversational queries integration', () => {
       username: container.getUsername(),
       password: container.getPassword(),
       database: container.getDatabase(),
-      entities: [
-        Business,
-        Account,
-        Transaction,
-        Entry,
-        InboundMessage,
-        TransactionProposal,
-      ],
-      migrations: [
-        CreateLedgerCore1699999999000,
-        ImmutabilityTriggers1700000000000,
-        TenantConsistencyAndPolicies1700000001000,
-        PostingLifecycle1700000002000,
-        LedgerHardening1700000003000,
-        InboundMessages1700000004000,
-        InboundRetryColumns1700000005000,
-        ReportReadIndexes1700000006000,
-        TransactionProposals1700000007000,
-      ],
+      entities: KASICASH_ENTITIES,
+      migrations: KASICASH_MIGRATIONS,
       synchronize: false,
     });
     await dataSource.initialize();
@@ -109,7 +83,7 @@ describe('Conversational queries integration', () => {
       currency: 'ZAR',
       idempotencyKey: 'phase5-reversed-sale',
       sourceType: 'API',
-      sourcePayloadHash: 'phase5-reversed-sale-hash',
+      sourcePayloadHash: 'a'.repeat(64),
       occurredAt: queryAnchor,
       receivedAt: queryAnchor,
       entries: [
@@ -123,7 +97,7 @@ describe('Conversational queries integration', () => {
       currency: 'ZAR',
       idempotencyKey: 'phase5-kept-sale',
       sourceType: 'API',
-      sourcePayloadHash: 'phase5-kept-sale-hash',
+      sourcePayloadHash: 'b'.repeat(64),
       occurredAt: queryAnchor,
       receivedAt: queryAnchor,
       entries: [
@@ -137,7 +111,7 @@ describe('Conversational queries integration', () => {
       currency: 'ZAR',
       idempotencyKey: 'phase5-stock-expense',
       sourceType: 'API',
-      sourcePayloadHash: 'phase5-stock-expense-hash',
+      sourcePayloadHash: 'c'.repeat(64),
       occurredAt: queryAnchor,
       receivedAt: queryAnchor,
       entries: [
@@ -150,6 +124,7 @@ describe('Conversational queries integration', () => {
       ],
     });
     await ledger.reverseTransaction(
+      business.id,
       reversedSale.id,
       'phase5-reversal',
       'Customer refund',
@@ -160,7 +135,7 @@ describe('Conversational queries integration', () => {
       currency: 'ZAR',
       idempotencyKey: 'phase5-other-tenant-sale',
       sourceType: 'API',
-      sourcePayloadHash: 'phase5-other-tenant-sale-hash',
+      sourcePayloadHash: 'd'.repeat(64),
       occurredAt: queryAnchor,
       receivedAt: queryAnchor,
       entries: [

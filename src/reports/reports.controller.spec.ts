@@ -1,46 +1,66 @@
-import { ForbiddenException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { ReportsController } from './reports.controller';
+import { ReportsController, parseIntegerQuery } from './reports.controller';
 import { ReportsService } from './reports.service';
+import type { AuthenticatedRequest } from '../auth/auth.guard';
 
 describe('ReportsController', () => {
-  it('keeps caller-selected tenant report routes disabled by default', () => {
-    const getCashPosition = jest.fn();
-    const reports = {
-      getCashPosition,
-    } as unknown as ReportsService;
-    const config = { get: jest.fn().mockReturnValue(undefined) };
-    const controller = new ReportsController(
-      reports,
-      config as unknown as ConfigService,
-    );
-
-    expect(() =>
-      controller.getCashPosition({ businessId: 'business-from-client' }),
-    ).toThrow(ForbiddenException);
-    expect(getCashPosition).not.toHaveBeenCalled();
-  });
-
-  it('allows explicit report-route enablement for controlled environments', () => {
+  it('uses the authenticated principal for cash-position tenant scoping', () => {
     const getCashPosition = jest.fn().mockReturnValue({ ok: true });
     const reports = {
       getCashPosition,
     } as unknown as ReportsService;
-    const config = {
-      get: (key: string) =>
-        key === 'KASICASH_REPORT_ROUTES' ? 'true' : undefined,
-    };
-    const controller = new ReportsController(
-      reports,
-      config as unknown as ConfigService,
-    );
+    const controller = new ReportsController(reports);
 
-    expect(controller.getCashPosition({ businessId: 'b-1' })).toEqual({
-      ok: true,
-    });
+    expect(controller.getCashPosition(authRequest())).toEqual({ ok: true });
     expect(getCashPosition).toHaveBeenCalledWith({
-      businessId: 'b-1',
-      currency: undefined,
+      businessId: 'trusted-business',
+      currency: 'ZAR',
     });
   });
+
+  it('ignores caller-supplied tenant, currency, and timezone fields on period reports', () => {
+    const getIncomeStatement = jest.fn().mockReturnValue({ ok: true });
+    const reports = {
+      getIncomeStatement,
+    } as unknown as ReportsService;
+    const controller = new ReportsController(reports);
+
+    expect(
+      controller.getIncomeStatement(authRequest(), {
+        businessId: 'attacker-business',
+        currency: 'USD',
+        timezone: 'UTC',
+        from: '2026-07-01',
+        to: '2026-07-31',
+      } as never),
+    ).toEqual({
+      ok: true,
+    });
+    expect(getIncomeStatement).toHaveBeenCalledWith({
+      businessId: 'trusted-business',
+      currency: 'ZAR',
+      timezone: 'Africa/Johannesburg',
+      from: '2026-07-01',
+      to: '2026-07-31',
+    });
+  });
+
+  it('rejects scientific, infinite, fractional, and malformed pagination', () => {
+    for (const value of ['1e2', 'Infinity', '1.5', '-1', ' 2', '2x']) {
+      expect(() => parseIntegerQuery(value, 'offset')).toThrow(
+        'offset must be a base-10 integer',
+      );
+    }
+  });
 });
+
+function authRequest(): AuthenticatedRequest {
+  return {
+    authPrincipal: {
+      principalId: 'principal-1',
+      email: 'owner@example.com',
+      businessId: 'trusted-business',
+      currency: 'ZAR',
+      timezone: 'Africa/Johannesburg',
+    },
+  } as AuthenticatedRequest;
+}

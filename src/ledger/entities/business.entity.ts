@@ -20,7 +20,7 @@ export class Business {
   @Column({ name: 'wa_phone', type: 'varchar', nullable: true })
   waPhone: string;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
   @OneToMany(() => Account, (account) => account.business)

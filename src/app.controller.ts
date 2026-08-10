@@ -9,9 +9,4 @@ export class AppController {
       service: 'kasicash-api',
     };
   }
-
-  @Get('health')
-  health() {
-    return { ok: true };
-  }
 }

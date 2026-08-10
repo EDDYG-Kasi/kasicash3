@@ -89,12 +89,30 @@ describe('reports math', () => {
     expect(period.endUtcExclusive).toBe('2026-07-06T22:00:00.000Z');
   });
 
+  it('rejects report periods longer than 366 local calendar days', () => {
+    expect(() =>
+      computeReportPeriod('2025-01-01', '2026-01-02', 'UTC'),
+    ).toThrow('report period cannot exceed 366 days');
+  });
+
   it('formats minor-unit strings without floats', () => {
     expect(toMoneyDto('-12345', 'ZAR')).toEqual({
       amountMinor: '-12345',
       formatted: '-ZAR 123.45',
       currency: 'ZAR',
     });
+  });
+
+  it('uses authoritative zero-, two-, and three-decimal currency scales', () => {
+    expect(toMoneyDto('1000', 'JPY').formatted).toBe('JPY 1000');
+    expect(toMoneyDto('1000', 'ZAR').formatted).toBe('ZAR 10.00');
+    expect(toMoneyDto('1000', 'BHD').formatted).toBe('BHD 1.000');
+  });
+
+  it('rejects currencies without an explicit scale contract', () => {
+    expect(() => toMoneyDto('1000', 'AAA')).toThrow(
+      'currency is not supported',
+    );
   });
 });
 

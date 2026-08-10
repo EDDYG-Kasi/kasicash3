@@ -3,9 +3,14 @@ import {
   Body,
   Controller,
   ForbiddenException,
+  Headers,
   Post,
+  Req,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { timingSafeEqual } from 'crypto';
+import type { Request } from 'express';
+import { SecurityRateLimiterService } from '../auth/rate-limiter.service';
 import { IngestionService } from './ingestion.service';
 
 interface SimulateTextBody {
@@ -20,11 +25,25 @@ export class DevController {
   constructor(
     private readonly ingestion: IngestionService,
     private readonly config: ConfigService,
+    private readonly rateLimiter: SecurityRateLimiterService,
   ) {}
 
   @Post('whatsapp/text')
-  async simulateWhatsAppText(@Body() body?: SimulateTextBody) {
+  async simulateWhatsAppText(
+    @Req() request: Request,
+    @Body() body?: SimulateTextBody,
+    @Headers('x-kasicash-dev-token') devToken?: string,
+  ) {
+    await this.rateLimiter.assertAllowed(
+      `dev:whatsapp:${clientIp(request)}`,
+      30,
+      60 * 1000,
+    );
     if (this.config.get<string>('KASICASH_DEV_TOOLS') !== 'true') {
+      throw new ForbiddenException('Developer tools are disabled');
+    }
+    const expected = this.config.get<string>('KASICASH_DEV_TOOLS_TOKEN');
+    if (!expected || !constantTimeStringEqual(expected, devToken ?? '')) {
       throw new ForbiddenException('Developer tools are disabled');
     }
 
@@ -44,6 +63,19 @@ export class DevController {
       ...result,
     };
   }
+}
+
+function clientIp(request: Request): string {
+  return request.ip ?? request.socket.remoteAddress ?? 'unknown';
+}
+
+function constantTimeStringEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  );
 }
 
 function normalizeWaPhone(raw: unknown): string {

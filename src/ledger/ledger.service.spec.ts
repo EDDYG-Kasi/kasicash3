@@ -5,6 +5,8 @@ import { DataSource } from 'typeorm';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 
 describe('LedgerService', () => {
+  const hashA = 'a'.repeat(64);
+  const hashB = 'b'.repeat(64);
   let service: LedgerService;
   let mockQueryRunner: any;
   let mockDataSource: any;
@@ -67,7 +69,7 @@ describe('LedgerService', () => {
     currency: 'ZAR',
     idempotencyKey: 'idemp-1',
     sourceType: 'API',
-    sourcePayloadHash: 'H1',
+    sourcePayloadHash: hashA,
     occurredAt: new Date(),
     receivedAt: new Date(),
     entries: validEntries,
@@ -75,6 +77,15 @@ describe('LedgerService', () => {
   });
 
   describe('postTransaction', () => {
+    it('refuses caller-managed posting without an active transaction', async () => {
+      await expect(
+        service.postTransactionWithManager(
+          mockQueryRunner.manager as never,
+          dto(),
+        ),
+      ).rejects.toThrow('requires an active database transaction');
+    });
+
     it('throws if debits do not equal credits', async () => {
       await expect(
         service.postTransaction(
@@ -133,7 +144,27 @@ describe('LedgerService', () => {
     it('throws if payload hash is missing for an externally sourced transaction', async () => {
       await expect(
         service.postTransaction(dto({ sourcePayloadHash: undefined })),
-      ).rejects.toThrow('Source payload hash is required');
+      ).rejects.toThrow('lowercase SHA-256 hex digest');
+    });
+
+    it('rejects malformed provenance before opening a transaction', async () => {
+      await expect(
+        service.postTransaction(dto({ sourceType: 'EMAIL' })),
+      ).rejects.toThrow('Source type must be SYSTEM, WHATSAPP, API, or WEB');
+      await expect(
+        service.postTransaction(dto({ sourcePayloadHash: 'A'.repeat(64) })),
+      ).rejects.toThrow('lowercase SHA-256 hex digest');
+      await expect(
+        service.postTransaction(
+          dto({ sourceType: 'WHATSAPP', sourceMessageId: undefined }),
+        ),
+      ).rejects.toThrow('require a source message id');
+      await expect(
+        service.postTransaction(
+          dto({ sourceType: 'SYSTEM', sourcePayloadHash: hashA }),
+        ),
+      ).rejects.toThrow('cannot carry an external payload hash');
+      expect(mockDataSource.createQueryRunner).not.toHaveBeenCalled();
     });
 
     it('allows a SYSTEM-sourced transaction without a payload hash', async () => {
@@ -156,22 +187,22 @@ describe('LedgerService', () => {
     it('returns the existing transaction on duplicate key with matching hash', async () => {
       mockQueryRunner.manager.findOne.mockResolvedValueOnce({
         id: 'existing-id',
-        sourcePayloadHash: 'H1',
+        sourcePayloadHash: hashA,
       });
       const result = await service.postTransaction(
-        dto({ sourcePayloadHash: 'H1' }),
+        dto({ sourcePayloadHash: hashA }),
       );
       expect(result.id).toBe('existing-id');
-      expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
     });
 
     it('throws Conflict on duplicate key with a different hash', async () => {
       mockQueryRunner.manager.findOne.mockResolvedValueOnce({
         id: 'existing-id',
-        sourcePayloadHash: 'H1',
+        sourcePayloadHash: hashA,
       });
       await expect(
-        service.postTransaction(dto({ sourcePayloadHash: 'H2' })),
+        service.postTransaction(dto({ sourcePayloadHash: hashB })),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -182,6 +213,17 @@ describe('LedgerService', () => {
       expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
       expect(result.id).toBe('test-tx-id');
       expect(result.entries.length).toBe(2);
+    });
+
+    it('normalizes supported currency codes and rejects unknown scales', async () => {
+      await service.postTransaction(dto({ currency: 'zar' }));
+      expect(mockQueryRunner.manager.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ currency: 'ZAR' }),
+      );
+      await expect(
+        service.postTransaction(dto({ currency: 'AAA' })),
+      ).rejects.toThrow('Currency must be one of');
     });
   });
 
@@ -202,9 +244,17 @@ describe('LedgerService', () => {
         .mockResolvedValueOnce(null); // existing reversal
 
       const result = await service.reverseTransaction(
+        'b-1',
         'orig-tx',
         'rev-idemp',
         'Refund',
+      );
+
+      expect(mockQueryRunner.manager.findOne).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          where: { id: 'orig-tx', businessId: 'b-1' },
+        }),
       );
 
       expect(result.reversalOfTransactionId).toBe('orig-tx');
@@ -223,7 +273,7 @@ describe('LedgerService', () => {
         status: 'REVERSED',
       });
       await expect(
-        service.reverseTransaction('orig-tx', 'rev-idemp', 'Refund'),
+        service.reverseTransaction('b-1', 'orig-tx', 'rev-idemp', 'Refund'),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -235,6 +285,7 @@ describe('LedgerService', () => {
           reversalOfTransactionId: 'orig-tx',
         });
       const result = await service.reverseTransaction(
+        'b-1',
         'orig-tx',
         'rev-idemp',
         'Refund',
@@ -253,6 +304,7 @@ describe('LedgerService', () => {
           status: 'POSTED',
         });
       const result = await service.reverseTransaction(
+        'b-1',
         'orig-tx',
         'rev-idemp',
         'Refund',
@@ -268,7 +320,7 @@ describe('LedgerService', () => {
           reversalOfTransactionId: 'some-other-tx',
         });
       await expect(
-        service.reverseTransaction('orig-tx', 'rev-idemp', 'Refund'),
+        service.reverseTransaction('b-1', 'orig-tx', 'rev-idemp', 'Refund'),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -288,6 +340,7 @@ describe('LedgerService', () => {
         reversalOfTransactionId: 'orig-tx',
       });
       const result = await service.reverseTransaction(
+        'b-1',
         'orig-tx',
         'rev-idemp',
         'Refund',
@@ -311,7 +364,7 @@ describe('LedgerService', () => {
         reversalOfTransactionId: 'orig-tx',
       });
       await expect(
-        service.reverseTransaction('orig-tx', 'rev-idemp', 'Refund'),
+        service.reverseTransaction('b-1', 'orig-tx', 'rev-idemp', 'Refund'),
       ).rejects.toBeInstanceOf(ConflictException);
     });
   });
@@ -324,10 +377,10 @@ describe('LedgerService', () => {
       });
       mockDataSource.manager.findOne.mockResolvedValueOnce({
         id: 'winner',
-        sourcePayloadHash: 'H1',
+        sourcePayloadHash: hashA,
       });
       const result = await service.postTransaction(
-        dto({ sourcePayloadHash: 'H1' }),
+        dto({ sourcePayloadHash: hashA }),
       );
       expect(result.id).toBe('winner');
     });

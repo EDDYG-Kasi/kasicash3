@@ -1,41 +1,25 @@
 import { BadRequestException } from '@nestjs/common';
 import { MoneyDto, ReportPeriodDto } from './reports.dto';
+import { currencyMinorUnitScale, isSupportedCurrency } from '../money/currency';
 
 const DEFAULT_CURRENCY = 'ZAR';
 const DEFAULT_TIMEZONE = 'Africa/Johannesburg';
-const DEFAULT_MINOR_UNIT_SCALE = 2;
 const DEBIT_POSITIVE_ACCOUNT_TYPES = new Set(['ASSET', 'EXPENSE']);
 const CREDIT_POSITIVE_ACCOUNT_TYPES = new Set([
   'LIABILITY',
   'EQUITY',
   'REVENUE',
 ]);
-const CURRENCY_MINOR_UNIT_SCALE: Record<string, number> = {
-  BIF: 0,
-  CLP: 0,
-  DJF: 0,
-  GNF: 0,
-  JPY: 0,
-  KMF: 0,
-  KRW: 0,
-  MGA: 0,
-  PYG: 0,
-  RWF: 0,
-  UGX: 0,
-  VND: 0,
-  VUV: 0,
-  XAF: 0,
-  XOF: 0,
-  XPF: 0,
-};
-
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MONEY_INTEGER = /^-?\d+$/;
+export const MAX_REPORT_PERIOD_DAYS = 366;
 
 export function normalizeCurrency(raw?: string): string {
   const currency = (raw ?? DEFAULT_CURRENCY).trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) {
-    throw new BadRequestException('currency must be a 3-letter ISO code');
+  if (!isSupportedCurrency(currency)) {
+    throw new BadRequestException(
+      'currency must be one of ZAR, USD, JPY, or BHD',
+    );
   }
   return currency;
 }
@@ -108,13 +92,22 @@ export function computeReportPeriod(
   const timezone = normalizeTimezone(timezoneInput);
   const fromParts = parseLocalDate(from, 'from');
   const toParts = parseLocalDate(to, 'to');
+  const localDayCount =
+    (Date.UTC(toParts.year, toParts.month - 1, toParts.day) -
+      Date.UTC(fromParts.year, fromParts.month - 1, fromParts.day)) /
+      86_400_000 +
+    1;
+  if (localDayCount <= 0) {
+    throw new BadRequestException('to must be on or after from');
+  }
+  if (localDayCount > MAX_REPORT_PERIOD_DAYS) {
+    throw new BadRequestException(
+      `report period cannot exceed ${MAX_REPORT_PERIOD_DAYS} days`,
+    );
+  }
   const startUtc = zonedDateTimeToUtc(fromParts, timezone);
   const endLocal = addDays(toParts, 1);
   const endUtcExclusive = zonedDateTimeToUtc(endLocal, timezone);
-
-  if (endUtcExclusive.getTime() <= startUtc.getTime()) {
-    throw new BadRequestException('to must be on or after from');
-  }
 
   return {
     fromLocalDate: from,
@@ -137,7 +130,10 @@ function parseMinor(value: string): bigint {
 }
 
 function formatMinorAsMajor(amountMinor: string, currency: string): string {
-  const scale = CURRENCY_MINOR_UNIT_SCALE[currency] ?? DEFAULT_MINOR_UNIT_SCALE;
+  if (!isSupportedCurrency(currency)) {
+    throw new BadRequestException('currency is not supported');
+  }
+  const scale = currencyMinorUnitScale(currency);
   const amount = parseMinor(amountMinor);
   const negative = amount < 0n;
   const absolute = negative ? -amount : amount;

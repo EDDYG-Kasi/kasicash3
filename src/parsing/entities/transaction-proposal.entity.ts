@@ -35,10 +35,13 @@ export class TransactionProposal {
   @Column({ type: 'text' })
   description: string;
 
-  @Column({ name: 'wa_timestamp', type: 'timestamp' })
+  @Column({ name: 'proposal_digest', type: 'varchar', length: 64 })
+  proposalDigest: string;
+
+  @Column({ name: 'wa_timestamp', type: 'timestamptz' })
   waTimestamp: Date;
 
-  @Column({ name: 'received_at', type: 'timestamp' })
+  @Column({ name: 'received_at', type: 'timestamptz' })
   receivedAt: Date;
 
   @Column({ type: 'varchar', default: 'PENDING' })
@@ -54,9 +57,9 @@ export class TransactionProposal {
   @Column({ name: 'transaction_id', type: 'uuid', nullable: true })
   transactionId: string | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 }

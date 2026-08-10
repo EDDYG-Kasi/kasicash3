@@ -38,7 +38,7 @@ export class ImmutabilityTriggers1700000000000 implements MigrationInterface {
                 END IF;
 
                 -- Check if economic fields changed
-                IF NEW.description != OLD.description OR 
+                IF NEW.description != OLD.description OR
                    NEW.currency != OLD.currency OR
                    NEW.occurred_at != OLD.occurred_at THEN
                     RAISE EXCEPTION 'Immutable record violation: Economic fields of transactions cannot be modified';
@@ -65,7 +65,7 @@ export class ImmutabilityTriggers1700000000000 implements MigrationInterface {
                 total_credits bigint;
                 entry_count int;
             BEGIN
-                SELECT 
+                SELECT
                     COALESCE(SUM(CASE WHEN type = 'DEBIT' THEN amount_minor ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN type = 'CREDIT' THEN amount_minor ELSE 0 END), 0),
                     COUNT(*)

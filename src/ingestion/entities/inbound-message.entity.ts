@@ -39,10 +39,10 @@ export class InboundMessage {
   @Column({ name: 'text_body', type: 'text', nullable: true })
   textBody: string;
 
-  @Column({ name: 'wa_timestamp', type: 'timestamp' })
+  @Column({ name: 'wa_timestamp', type: 'timestamptz' })
   waTimestamp: Date; // sender-side time (Event Ordering: keep both timestamps)
 
-  @CreateDateColumn({ name: 'received_at' })
+  @CreateDateColumn({ name: 'received_at', type: 'timestamptz' })
   receivedAt: Date; // server receipt time
 
   @Column({ type: 'varchar', default: 'RECEIVED' }) // RECEIVED | PROCESSED | FAILED | DEAD
@@ -51,12 +51,24 @@ export class InboundMessage {
   @Column({ type: 'int', default: 0 })
   attempts: number; // processing attempts; drives backoff and DLQ cutoff
 
-  @Column({ name: 'next_retry_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'ingest_sequence', type: 'bigint', generated: 'increment' })
+  ingestSequence: string;
+
+  @Column({ name: 'claim_token', type: 'uuid', nullable: true })
+  claimToken: string | null;
+
+  @Column({ name: 'lease_expires_at', type: 'timestamptz', nullable: true })
+  leaseExpiresAt: Date | null;
+
+  @Column({ name: 'next_retry_at', type: 'timestamptz', nullable: true })
   nextRetryAt: Date | null; // when a FAILED message is eligible for retry
 
-  @Column({ name: 'processed_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'processed_at', type: 'timestamptz', nullable: true })
   processedAt: Date;
 
   @Column({ type: 'text', nullable: true })
   error: string | null;
+
+  @Column({ name: 'error_code', type: 'varchar', nullable: true })
+  errorCode: string | null;
 }

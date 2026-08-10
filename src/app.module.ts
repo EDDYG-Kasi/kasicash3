@@ -5,6 +5,13 @@ import { AppController } from './app.controller';
 import { LedgerModule } from './ledger/ledger.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { ReportsModule } from './reports/reports.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { AnomalyModule } from './anomaly/anomaly.module';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { AuthModule } from './auth/auth.module';
+import { ObservabilityModule } from './observability/observability.module';
+import { buildPostgresDataSourceOptions } from './database/database-options';
+import { validateRuntimeConfiguration } from './config/runtime-config';
 
 @Module({
   imports: [
@@ -13,21 +20,22 @@ import { ReportsModule } from './reports/reports.module';
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('DB_HOST', 'localhost'),
-        port: configService.get<number>('DB_PORT', 5432),
-        username: configService.get<string>('DB_USER', 'postgres'),
-        password: configService.get<string>('DB_PASSWORD', 'postgres'),
-        database: configService.get<string>('DB_NAME', 'kasicash'),
-        autoLoadEntities: true,
-        synchronize: false, // Strict migration control
-      }),
+      useFactory: (configService: ConfigService) => {
+        validateRuntimeConfiguration(process.env);
+        return buildPostgresDataSourceOptions((name) =>
+          configService.get<string>(name),
+        );
+      },
       inject: [ConfigService],
     }),
+    ObservabilityModule,
+    AuthModule,
     LedgerModule,
     IngestionModule,
     ReportsModule,
+    AnalyticsModule,
+    AnomalyModule,
+    DashboardModule,
   ],
   controllers: [AppController],
 })

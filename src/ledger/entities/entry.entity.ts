@@ -39,6 +39,6 @@ export class Entry {
   @Column({ name: 'account_id', type: 'uuid' })
   accountId: string;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

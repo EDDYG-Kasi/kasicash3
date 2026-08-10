@@ -9,8 +9,4 @@ describe('AppController', () => {
       service: 'kasicash-api',
     });
   });
-
-  it('returns a simple health response', () => {
-    expect(controller.health()).toEqual({ ok: true });
-  });
 });

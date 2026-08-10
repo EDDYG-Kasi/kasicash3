@@ -6,6 +6,7 @@ import {
   HeuristicConversationalQueryResolver,
   ResolvedConversationalQuery,
   classifyConversationalRoute,
+  validateResolvedConversationalQuery,
 } from './conversational-query.resolver';
 import { ConversationalQueryService } from './conversational-query.service';
 
@@ -16,6 +17,71 @@ describe('classifyConversationalRoute', () => {
       'QUERY',
     );
     expect(classifyConversationalRoute('hello there')).toBe('FALLBACK');
+  });
+});
+
+describe('validateResolvedConversationalQuery', () => {
+  it('returns a fresh canonical object instead of trusting resolver identity', () => {
+    const candidate = {
+      kind: 'INCOME_STATEMENT',
+      period: { from: '2026-07-01', to: '2026-07-31' },
+      currency: 'ZAR',
+    };
+
+    const validated = validateResolvedConversationalQuery(candidate);
+
+    expect(validated).toEqual(candidate);
+    expect(validated).not.toBe(candidate);
+    expect(validated.kind === 'INCOME_STATEMENT' && validated.period).not.toBe(
+      candidate.period,
+    );
+  });
+
+  it.each([
+    Object.create({ kind: 'CASH_BALANCE' }) as unknown,
+    new Proxy({ kind: 'CASH_BALANCE' }, {}) as unknown,
+    Object.assign(Object.create({ inherited: 'hidden' }), {
+      kind: 'CASH_BALANCE',
+    }) as unknown,
+    { kind: 'RECENT_TRANSACTIONS', limit: Number.NaN },
+    { kind: 'RECENT_TRANSACTIONS', limit: Number.POSITIVE_INFINITY },
+    { kind: 'RECENT_TRANSACTIONS', limit: 1.5 },
+    {
+      kind: 'RECENT_TRANSACTIONS',
+      limit: Number.MAX_SAFE_INTEGER + 1,
+    },
+  ])('rejects hostile or non-canonical resolver output', (candidate) => {
+    expect(() => validateResolvedConversationalQuery(candidate)).toThrow();
+  });
+
+  it('rejects accessors without invoking them', () => {
+    const getter = jest.fn(() => 'CASH_BALANCE');
+    const candidate = Object.defineProperty({}, 'kind', {
+      enumerable: true,
+      get: getter,
+    });
+
+    expect(() => validateResolvedConversationalQuery(candidate)).toThrow(
+      'own enumerable data fields',
+    );
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it('rejects symbol and non-enumerable fields', () => {
+    expect(() =>
+      validateResolvedConversationalQuery({
+        kind: 'CASH_BALANCE',
+        [Symbol('hidden')]: 'value',
+      }),
+    ).toThrow('symbol fields');
+
+    const hidden = Object.defineProperty({ kind: 'CASH_BALANCE' }, 'currency', {
+      enumerable: false,
+      value: 'ZAR',
+    });
+    expect(() => validateResolvedConversationalQuery(hidden)).toThrow(
+      'own enumerable data fields',
+    );
   });
 });
 
@@ -124,7 +190,7 @@ describe('ConversationalQueryService', () => {
     return { service, manager, reports, resolver };
   }
 
-  it('renders only figures returned by ReportsService, not resolver-proposed numbers', async () => {
+  it('rejects resolver output carrying an unexpected invented figure', async () => {
     const { service, manager, reports } = makeService({
       kind: 'CASH_BALANCE',
       inventedAmountMinor: '999999',
@@ -133,12 +199,11 @@ describe('ConversationalQueryService', () => {
     const result = await service.handle(baseInput);
 
     expect(result).toMatchObject({ handled: true });
-    expect(result.handled && result.replyBody).toContain('ZAR 75.00');
+    expect(result.handled && result.replyBody).toContain(
+      "couldn't answer that question just now",
+    );
     expect(result.handled && result.replyBody).not.toContain('999999');
-    expect((reports.getCashPosition as jest.Mock).mock.calls[0][0]).toEqual({
-      businessId: 'b-1',
-      currency: 'ZAR',
-    });
+    expect(reports.getCashPosition).not.toHaveBeenCalled();
     expect(manager.save).not.toHaveBeenCalled();
     expect(manager.update).not.toHaveBeenCalled();
     expect(manager.delete).not.toHaveBeenCalled();

@@ -1,20 +1,17 @@
 import {
   BadRequestException,
   Controller,
-  ForbiddenException,
   Get,
   Param,
   Query,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { AuthGuard, requireAuthPrincipal } from '../auth/auth.guard';
+import type { AuthenticatedRequest } from '../auth/auth.guard';
 import { ReportsService } from './reports.service';
 
-interface CashPositionQuery {
-  businessId?: string;
-  currency?: string;
-}
-
-interface PeriodQuery extends CashPositionQuery {
+interface PeriodQuery {
   from?: string;
   to?: string;
   timezone?: string;
@@ -26,60 +23,72 @@ interface StatementQuery extends PeriodQuery {
 }
 
 /**
- * Phase 4 read-only report routes. Disabled by default: the constitution does
- * not permit tenant selection from untrusted request input in production.
+ * Authenticated read-only report routes. Tenant, currency, and timezone come
+ * from the server-side principal context; caller-supplied tenant fields are
+ * ignored.
  */
 @Controller('reports')
+@UseGuards(AuthGuard)
 export class ReportsController {
-  constructor(
-    private readonly reports: ReportsService,
-    private readonly config: ConfigService,
-  ) {}
+  constructor(private readonly reports: ReportsService) {}
 
   @Get('balances')
-  getCashPosition(@Query() query: CashPositionQuery) {
-    this.assertReportRoutesEnabled();
+  getCashPosition(@Req() request: AuthenticatedRequest) {
+    const principal = requireAuthPrincipal(request);
     return this.reports.getCashPosition({
-      businessId: requireQuery(query.businessId, 'businessId'),
-      currency: query.currency,
+      businessId: principal.businessId,
+      currency: principal.currency,
     });
   }
 
   @Get('income-statement')
-  getIncomeStatement(@Query() query: PeriodQuery) {
-    this.assertReportRoutesEnabled();
+  getIncomeStatement(
+    @Req() request: AuthenticatedRequest,
+    @Query() query: PeriodQuery,
+  ) {
+    const principal = requireAuthPrincipal(request);
     return this.reports.getIncomeStatement({
-      businessId: requireQuery(query.businessId, 'businessId'),
+      businessId: principal.businessId,
       from: requireQuery(query.from, 'from'),
       to: requireQuery(query.to, 'to'),
-      timezone: query.timezone,
-      currency: query.currency,
+      timezone: principal.timezone,
+      currency: principal.currency,
     });
   }
 
   @Get('accounts/:accountId/statement')
   getAccountStatement(
+    @Req() request: AuthenticatedRequest,
     @Param('accountId') accountId: string,
     @Query() query: StatementQuery,
   ) {
-    this.assertReportRoutesEnabled();
+    const principal = requireAuthPrincipal(request);
     return this.reports.getAccountStatement({
-      businessId: requireQuery(query.businessId, 'businessId'),
+      businessId: principal.businessId,
       accountId,
       from: requireQuery(query.from, 'from'),
       to: requireQuery(query.to, 'to'),
-      timezone: query.timezone,
-      currency: query.currency,
-      limit: query.limit === undefined ? undefined : Number(query.limit),
-      offset: query.offset === undefined ? undefined : Number(query.offset),
+      timezone: principal.timezone,
+      currency: principal.currency,
+      limit: parseIntegerQuery(query.limit, 'limit'),
+      offset: parseIntegerQuery(query.offset, 'offset'),
     });
   }
+}
 
-  private assertReportRoutesEnabled(): void {
-    if (this.config.get<string>('KASICASH_REPORT_ROUTES') !== 'true') {
-      throw new ForbiddenException('Report routes are disabled');
-    }
+export function parseIntegerQuery(
+  value: string | undefined,
+  name: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^\d+$/.test(value)) {
+    throw new BadRequestException(`${name} must be a base-10 integer`);
   }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new BadRequestException(`${name} is outside the supported range`);
+  }
+  return parsed;
 }
 
 function requireQuery(value: string | undefined, name: string): string {

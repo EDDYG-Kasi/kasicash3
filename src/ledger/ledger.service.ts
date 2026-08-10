@@ -7,6 +7,7 @@ import { DataSource, EntityManager, In, QueryFailedError } from 'typeorm';
 import { Transaction } from './entities/transaction.entity';
 import { Entry } from './entities/entry.entity';
 import { Account } from './entities/account.entity';
+import { isSupportedCurrency } from '../money/currency';
 
 export interface CreateTransactionDto {
   businessId: string;
@@ -33,118 +34,36 @@ const REVERSAL_UNIQUE_INDEX = 'UQ_transactions_one_reversal_per_original';
 
 // Internally generated source (e.g. reversals); exempt from the payload-hash rule.
 const INTERNAL_SOURCE_TYPE = 'SYSTEM';
+const EXTERNAL_SOURCE_TYPES = new Set(['WHATSAPP', 'API', 'WEB']);
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 
 // PostgreSQL signed bigint upper bound. amount_minor is stored as bigint.
 const INT64_MAX = 9223372036854775807n;
+
+interface NormalizedCreateTransaction {
+  currency: string;
+  sourceType: string;
+  sourceMessageId?: string;
+}
 
 @Injectable()
 export class LedgerService {
   constructor(private dataSource: DataSource) {}
 
   async postTransaction(dto: CreateTransactionDto): Promise<Transaction> {
-    // ---- Stateless validation (no DB access) ----
-    if (!dto.idempotencyKey)
-      throw new BadRequestException('Idempotency key is required.');
-    if (!dto.currency) throw new BadRequestException('Currency is required.');
-    if (!dto.sourceType)
-      throw new BadRequestException('Source reference is required.');
-    if (dto.sourceType !== INTERNAL_SOURCE_TYPE && !dto.sourcePayloadHash) {
-      throw new BadRequestException(
-        'Source payload hash is required for externally sourced transactions.',
-      );
-    }
-    if (!dto.entries || dto.entries.length < 2) {
-      throw new BadRequestException(
-        'A transaction must have at least two entries.',
-      );
-    }
-
-    let totalDebits = 0n;
-    let totalCredits = 0n;
-
-    for (const entry of dto.entries) {
-      if (!entry.accountId)
-        throw new BadRequestException('Every entry must reference an account.');
-      if (entry.type !== 'DEBIT' && entry.type !== 'CREDIT')
-        throw new BadRequestException(
-          'Entry must have explicit DEBIT or CREDIT side.',
-        );
-
-      const amount = parseAmountMinor(entry.amountMinor);
-      if (entry.type === 'DEBIT') totalDebits += amount;
-      else totalCredits += amount;
-    }
-
-    if (totalDebits !== totalCredits) {
-      throw new BadRequestException(
-        `Double-entry violation: Debits (${totalDebits.toString()}) do not equal Credits (${totalCredits.toString()}).`,
-      );
-    }
+    const normalized = validateCreateTransaction(dto);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
     try {
-      // Referential integrity + tenant isolation: every account must exist and
-      // belong to this business. FKs guarantee existence; this returns a clean
-      // error instead of a raw FK failure, and blocks cross-tenant references.
-      await this.assertAccountsBelongToBusiness(
+      const savedTransaction = await this.postValidatedTransaction(
         queryRunner.manager,
-        dto.businessId,
-        dto.entries.map((e) => e.accountId),
+        dto,
+        normalized,
       );
-
-      // Fast idempotency path for the common retry case.
-      const existing = await queryRunner.manager.findOne(Transaction, {
-        where: {
-          businessId: dto.businessId,
-          idempotencyKey: dto.idempotencyKey,
-        },
-        relations: { entries: true },
-      });
-      if (existing) {
-        await queryRunner.rollbackTransaction();
-        return reconcileIdempotentPost(existing, dto);
-      }
-
-      const transaction = queryRunner.manager.create(Transaction, {
-        businessId: dto.businessId,
-        description: dto.description,
-        currency: dto.currency,
-        idempotencyKey: dto.idempotencyKey,
-        sourceType: dto.sourceType,
-        sourceMessageId: dto.sourceMessageId,
-        sourcePayloadHash: dto.sourcePayloadHash,
-        occurredAt: dto.occurredAt,
-        receivedAt: dto.receivedAt,
-        postedAt: new Date(),
-        status: 'POSTING', // entries can only be added while POSTING; flipped below
-      });
-
-      const savedTransaction = await queryRunner.manager.save(transaction);
-
-      const entryEntities = dto.entries.map((entryDto) =>
-        queryRunner.manager.create(Entry, {
-          businessId: dto.businessId,
-          transactionId: savedTransaction.id,
-          accountId: entryDto.accountId,
-          amountMinor: entryDto.amountMinor,
-          type: entryDto.type,
-        }),
-      );
-
-      await queryRunner.manager.save(entryEntities);
-
-      // Seal the transaction: no further entries can be inserted once POSTED.
-      await queryRunner.manager.update(Transaction, savedTransaction.id, {
-        status: 'POSTED',
-      });
-
       await queryRunner.commitTransaction();
-
-      savedTransaction.status = 'POSTED';
-      savedTransaction.entries = entryEntities;
       return savedTransaction;
     } catch (err) {
       await safeRollback(queryRunner);
@@ -166,7 +85,84 @@ export class LedgerService {
     }
   }
 
+  /**
+   * Posts with the caller's transaction. This is intentionally used by the
+   * confirmation flow so the ledger row and proposal transition have one
+   * atomic commit boundary.
+   */
+  async postTransactionWithManager(
+    manager: EntityManager,
+    dto: CreateTransactionDto,
+  ): Promise<Transaction> {
+    if (!manager.queryRunner?.isTransactionActive) {
+      throw new Error(
+        'Caller-managed ledger posting requires an active database transaction',
+      );
+    }
+    return this.postValidatedTransaction(
+      manager,
+      dto,
+      validateCreateTransaction(dto),
+    );
+  }
+
+  private async postValidatedTransaction(
+    manager: EntityManager,
+    dto: CreateTransactionDto,
+    normalized: NormalizedCreateTransaction,
+  ): Promise<Transaction> {
+    // Referential integrity + tenant isolation: every account must exist and
+    // belong to this business before any transaction row is created.
+    await this.assertAccountsBelongToBusiness(
+      manager,
+      dto.businessId,
+      dto.entries.map((entry) => entry.accountId),
+    );
+
+    const existing = await manager.findOne(Transaction, {
+      where: {
+        businessId: dto.businessId,
+        idempotencyKey: dto.idempotencyKey,
+      },
+      relations: { entries: true },
+    });
+    if (existing) return reconcileIdempotentPost(existing, dto);
+
+    const transaction = manager.create(Transaction, {
+      businessId: dto.businessId,
+      description: dto.description,
+      currency: normalized.currency,
+      idempotencyKey: dto.idempotencyKey,
+      sourceType: normalized.sourceType,
+      sourceMessageId: normalized.sourceMessageId,
+      sourcePayloadHash: dto.sourcePayloadHash,
+      occurredAt: dto.occurredAt,
+      receivedAt: dto.receivedAt,
+      postedAt: new Date(),
+      status: 'POSTING',
+    });
+    const savedTransaction = await manager.save(transaction);
+    const entryEntities = dto.entries.map((entryDto) =>
+      manager.create(Entry, {
+        businessId: dto.businessId,
+        transactionId: savedTransaction.id,
+        accountId: entryDto.accountId,
+        amountMinor: entryDto.amountMinor,
+        type: entryDto.type,
+      }),
+    );
+    await manager.save(entryEntities);
+    await manager.update(Transaction, savedTransaction.id, {
+      status: 'POSTED',
+    });
+
+    savedTransaction.status = 'POSTED';
+    savedTransaction.entries = entryEntities;
+    return savedTransaction;
+  }
+
   async reverseTransaction(
+    businessId: string,
     originalTransactionId: string,
     idempotencyKey: string,
     reason: string,
@@ -181,7 +177,7 @@ export class LedgerService {
 
     try {
       const originalTx = await queryRunner.manager.findOne(Transaction, {
-        where: { id: originalTransactionId },
+        where: { id: originalTransactionId, businessId },
         relations: { entries: true },
       });
 
@@ -274,7 +270,7 @@ export class LedgerService {
       const constraint = uniqueViolationConstraint(err);
       if (constraint === IDEMPOTENCY_CONSTRAINT) {
         const original = await this.dataSource.manager.findOne(Transaction, {
-          where: { id: originalTransactionId },
+          where: { id: originalTransactionId, businessId },
         });
         if (original) {
           const winner = await this.dataSource.manager.findOne(Transaction, {
@@ -291,7 +287,10 @@ export class LedgerService {
         const existingReversal = await this.dataSource.manager.findOne(
           Transaction,
           {
-            where: { reversalOfTransactionId: originalTransactionId },
+            where: {
+              businessId,
+              reversalOfTransactionId: originalTransactionId,
+            },
             relations: { entries: true },
           },
         );
@@ -334,6 +333,62 @@ export class LedgerService {
       }
     }
   }
+}
+
+function validateCreateTransaction(
+  dto: CreateTransactionDto,
+): NormalizedCreateTransaction {
+  if (!dto.idempotencyKey) {
+    throw new BadRequestException('Idempotency key is required.');
+  }
+  const currency = normalizeLedgerCurrency(dto.currency);
+  const sourceType = normalizeSourceType(dto.sourceType);
+  const sourceMessageId = normalizeSourceMessageId(dto.sourceMessageId);
+  if (sourceType === INTERNAL_SOURCE_TYPE && dto.sourcePayloadHash) {
+    throw new BadRequestException(
+      'SYSTEM transactions cannot carry an external payload hash.',
+    );
+  }
+  if (
+    sourceType !== INTERNAL_SOURCE_TYPE &&
+    !SHA256_HEX_PATTERN.test(dto.sourcePayloadHash ?? '')
+  ) {
+    throw new BadRequestException(
+      'External source payload hash must be a lowercase SHA-256 hex digest.',
+    );
+  }
+  if (sourceType === 'WHATSAPP' && !sourceMessageId) {
+    throw new BadRequestException(
+      'WhatsApp transactions require a source message id.',
+    );
+  }
+  if (!dto.entries || dto.entries.length < 2) {
+    throw new BadRequestException(
+      'A transaction must have at least two entries.',
+    );
+  }
+
+  let totalDebits = 0n;
+  let totalCredits = 0n;
+  for (const entry of dto.entries) {
+    if (!entry.accountId) {
+      throw new BadRequestException('Every entry must reference an account.');
+    }
+    if (entry.type !== 'DEBIT' && entry.type !== 'CREDIT') {
+      throw new BadRequestException(
+        'Entry must have explicit DEBIT or CREDIT side.',
+      );
+    }
+    const amount = parseAmountMinor(entry.amountMinor);
+    if (entry.type === 'DEBIT') totalDebits += amount;
+    else totalCredits += amount;
+  }
+  if (totalDebits !== totalCredits) {
+    throw new BadRequestException(
+      `Double-entry violation: Debits (${totalDebits.toString()}) do not equal Credits (${totalCredits.toString()}).`,
+    );
+  }
+  return { currency, sourceType, sourceMessageId };
 }
 
 /**
@@ -394,6 +449,49 @@ function parseAmountMinor(raw: string): bigint {
     );
   }
   return amount;
+}
+
+function normalizeLedgerCurrency(raw: string): string {
+  if (typeof raw !== 'string') {
+    throw new BadRequestException('Currency is required.');
+  }
+  const currency = raw.trim().toUpperCase();
+  if (!isSupportedCurrency(currency)) {
+    throw new BadRequestException(
+      'Currency must be one of ZAR, USD, JPY, or BHD.',
+    );
+  }
+  return currency;
+}
+
+function normalizeSourceType(raw: string): string {
+  if (typeof raw !== 'string') {
+    throw new BadRequestException('Source reference is required.');
+  }
+  const sourceType = raw.trim().toUpperCase();
+  if (
+    sourceType !== INTERNAL_SOURCE_TYPE &&
+    !EXTERNAL_SOURCE_TYPES.has(sourceType)
+  ) {
+    throw new BadRequestException(
+      'Source type must be SYSTEM, WHATSAPP, API, or WEB.',
+    );
+  }
+  return sourceType;
+}
+
+function normalizeSourceMessageId(raw?: string): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string') {
+    throw new BadRequestException('Source message id must be a string.');
+  }
+  const value = raw.trim();
+  if (!value || value.length > 512) {
+    throw new BadRequestException(
+      'Source message id must contain 1 to 512 characters.',
+    );
+  }
+  return value;
 }
 
 async function safeRollback(queryRunner: {

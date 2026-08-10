@@ -7,19 +7,10 @@ import { LedgerService } from '../src/ledger/ledger.service';
 import { ReportsService } from '../src/reports/reports.service';
 import { Business } from '../src/ledger/entities/business.entity';
 import { Account, AccountType } from '../src/ledger/entities/account.entity';
-import { Transaction } from '../src/ledger/entities/transaction.entity';
-import { Entry } from '../src/ledger/entities/entry.entity';
-import { InboundMessage } from '../src/ingestion/entities/inbound-message.entity';
-import { TransactionProposal } from '../src/parsing/entities/transaction-proposal.entity';
-import { CreateLedgerCore1699999999000 } from '../src/migrations/1699999999000-CreateLedgerCore';
-import { ImmutabilityTriggers1700000000000 } from '../src/migrations/1700000000000-ImmutabilityTriggers';
-import { TenantConsistencyAndPolicies1700000001000 } from '../src/migrations/1700000001000-TenantConsistencyAndPolicies';
-import { PostingLifecycle1700000002000 } from '../src/migrations/1700000002000-PostingLifecycle';
-import { LedgerHardening1700000003000 } from '../src/migrations/1700000003000-LedgerHardening';
-import { InboundMessages1700000004000 } from '../src/migrations/1700000004000-InboundMessages';
-import { InboundRetryColumns1700000005000 } from '../src/migrations/1700000005000-InboundRetryColumns';
-import { ReportReadIndexes1700000006000 } from '../src/migrations/1700000006000-ReportReadIndexes';
-import { TransactionProposals1700000007000 } from '../src/migrations/1700000007000-TransactionProposals';
+import {
+  KASICASH_ENTITIES,
+  KASICASH_MIGRATIONS,
+} from '../src/database/database-options';
 
 describe('Reports Integration (read-only migrated PostgreSQL schema)', () => {
   let container: StartedPostgreSqlContainer;
@@ -43,25 +34,8 @@ describe('Reports Integration (read-only migrated PostgreSQL schema)', () => {
       username: container.getUsername(),
       password: container.getPassword(),
       database: container.getDatabase(),
-      entities: [
-        Business,
-        Account,
-        Transaction,
-        Entry,
-        InboundMessage,
-        TransactionProposal,
-      ],
-      migrations: [
-        CreateLedgerCore1699999999000,
-        ImmutabilityTriggers1700000000000,
-        TenantConsistencyAndPolicies1700000001000,
-        PostingLifecycle1700000002000,
-        LedgerHardening1700000003000,
-        InboundMessages1700000004000,
-        InboundRetryColumns1700000005000,
-        ReportReadIndexes1700000006000,
-        TransactionProposals1700000007000,
-      ],
+      entities: KASICASH_ENTITIES,
+      migrations: KASICASH_MIGRATIONS,
       synchronize: false,
     });
     await dataSource.initialize();
@@ -106,14 +80,19 @@ describe('Reports Integration (read-only migrated PostgreSQL schema)', () => {
     const reversedSale = await postSale('rev-sale', '3000');
     await postSale('kept-sale', '10000');
     await postExpense('stock', '2500');
-    await ledger.reverseTransaction(reversedSale.id, 'rev-sale-key', 'Refund');
+    await ledger.reverseTransaction(
+      businessA.id,
+      reversedSale.id,
+      'rev-sale-key',
+      'Refund',
+    );
     await ledger.postTransaction({
       businessId: businessB.id,
       description: 'Other tenant sale',
       currency: 'ZAR',
       idempotencyKey: 'other-tenant-sale',
       sourceType: 'API',
-      sourcePayloadHash: 'other-tenant-hash',
+      sourcePayloadHash: 'a'.repeat(64),
       occurredAt: new Date('2026-07-06T09:00:00.000Z'),
       receivedAt: new Date('2026-07-06T09:00:00.000Z'),
       entries: [
@@ -206,7 +185,7 @@ describe('Reports Integration (read-only migrated PostgreSQL schema)', () => {
       currency: 'ZAR',
       idempotencyKey,
       sourceType: 'API',
-      sourcePayloadHash: `${idempotencyKey}-hash`,
+      sourcePayloadHash: 'a'.repeat(64),
       occurredAt: new Date(
         `2026-07-06T0${idempotencyKey === 'rev-sale' ? 8 : 9}:00:00.000Z`,
       ),
@@ -225,7 +204,7 @@ describe('Reports Integration (read-only migrated PostgreSQL schema)', () => {
       currency: 'ZAR',
       idempotencyKey,
       sourceType: 'API',
-      sourcePayloadHash: `${idempotencyKey}-hash`,
+      sourcePayloadHash: 'a'.repeat(64),
       occurredAt: new Date('2026-07-06T10:00:00.000Z'),
       receivedAt: new Date('2026-07-06T10:00:00.000Z'),
       entries: [

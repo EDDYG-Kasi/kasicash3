@@ -7,6 +7,7 @@ import {
   PeriodProposal,
   ResolvedConversationalQuery,
   classifyConversationalRoute,
+  validateResolvedConversationalQuery,
 } from './conversational-query.resolver';
 import type { ConversationalQueryResolver } from './conversational-query.resolver';
 
@@ -75,15 +76,17 @@ export class ConversationalQueryService {
     const text = input.textBody?.trim() ?? '';
     let proposal: ResolvedConversationalQuery;
     try {
-      proposal = await this.resolver.resolve({
-        text,
-        timezone: DEFAULT_TIMEZONE,
-        currency: DEFAULT_CURRENCY,
-        accounts: [],
-      });
-    } catch (err) {
+      proposal = validateResolvedConversationalQuery(
+        await this.resolver.resolve({
+          text,
+          timezone: DEFAULT_TIMEZONE,
+          currency: DEFAULT_CURRENCY,
+          accounts: [],
+        }),
+      );
+    } catch {
       this.logger.warn(
-        `Conversational query resolver failed: ${errorMessage(err)}`,
+        'Conversational query resolver failed error_code=QUERY_RESOLUTION_FAILED',
       );
       return {
         handled: true,
@@ -94,9 +97,9 @@ export class ConversationalQueryService {
 
     try {
       return await this.answerProposal(input, proposal);
-    } catch (err) {
+    } catch {
       this.logger.warn(
-        `Conversational query failed safely: ${errorMessage(err)}`,
+        'Conversational query failed safely error_code=QUERY_EXECUTION_FAILED',
       );
       return {
         handled: true,
@@ -114,7 +117,10 @@ export class ConversationalQueryService {
       case 'NOT_QUERY':
         return { handled: false, route: 'FALLBACK' };
       case 'CLARIFY':
-        return { handled: true, replyBody: sanitizeReply(proposal.question) };
+        return {
+          handled: true,
+          replyBody: clarificationReply(proposal.reason),
+        };
       case 'OUT_OF_SCOPE':
         return {
           handled: true,
@@ -312,8 +318,21 @@ function resolveAllowedAccount(
 }
 
 function unknownAccountReply(hint?: string): string {
-  const suffix = hint ? ` for "${sanitizeReply(hint)}"` : '';
-  return `Which account should I check${suffix}? I can answer cash, sales, stock, or expenses right now.`;
+  void hint;
+  return 'Which account should I check? I can answer cash, sales, stock, or expenses right now.';
+}
+
+function clarificationReply(
+  reason: 'QUERY_TYPE' | 'PERIOD' | 'ACCOUNT',
+): string {
+  switch (reason) {
+    case 'PERIOD':
+      return 'Which period should I use: today, this week, or this month?';
+    case 'ACCOUNT':
+      return 'Which account should I check: cash, sales, stock, or expenses?';
+    case 'QUERY_TYPE':
+      return 'Do you want your cash balance, sales and expenses for a period, or recent transactions?';
+  }
 }
 
 function accountAliases(account: Account): string[] {
@@ -478,12 +497,4 @@ function formatLocalDate(isoInstant: string): string {
   return formatLocalDateParts(
     localDateParts(new Date(isoInstant), DEFAULT_TIMEZONE),
   );
-}
-
-function sanitizeReply(raw: string): string {
-  return raw.replace(/\s+/g, ' ').trim().slice(0, 240);
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message.slice(0, 200) : String(err);
 }

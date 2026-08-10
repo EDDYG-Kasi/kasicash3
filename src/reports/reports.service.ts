@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { DataSource, QueryRunner } from 'typeorm';
 import {
   AccountStatementInput,
@@ -15,9 +20,11 @@ import {
   sumMinorStrings,
   toMoneyDto,
 } from './reports.math';
+import { MetricsService } from '../observability/metrics.service';
 
 const MAX_STATEMENT_LIMIT = 200;
 const DEFAULT_STATEMENT_LIMIT = 50;
+const MAX_STATEMENT_OFFSET = 10_000;
 
 const SIGNED_ENTRY_SQL = `
   CASE
@@ -69,80 +76,90 @@ interface StatementLineRow {
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    @Optional() private readonly metrics?: MetricsService,
+  ) {}
 
   async getCashPosition(
     input: CashPositionInput,
   ): Promise<CashPositionReportDto> {
+    const startedAt = Date.now();
     const currency = normalizeCurrency(input.currency);
 
-    return this.withReadOnlyQueryRunner(async (queryRunner) => {
-      const rows = (await queryRunner.query(
-        `
-          SELECT
-            a.id AS "accountId",
-            a.code AS "code",
-            a.name AS "name",
-            a.type AS "type",
-            (a.code = '100' OR a.code LIKE '100.%') AS "isCash",
-            COALESCE(
-              SUM(
-                CASE
-                  WHEN t.id IS NULL THEN 0
-                  ELSE ${SIGNED_ENTRY_SQL}
-                END
-              ),
-              0
-            )::text AS "balanceMinor"
-          FROM accounts a
-          LEFT JOIN entries e
-            ON e.business_id = a.business_id
-           AND e.account_id = a.id
-          LEFT JOIN transactions t
-            ON t.business_id = e.business_id
-           AND t.id = e.transaction_id
-           AND t.status IN ('POSTED', 'REVERSED')
-           AND t.currency = $2
-          WHERE a.business_id = $1
-          GROUP BY a.id, a.code, a.name, a.type
-          ORDER BY a.code ASC, a.name ASC, a.id ASC
-        `,
-        [input.businessId, currency],
-      )) as AccountBalanceRow[];
+    try {
+      return await this.withReadOnlyQueryRunner(async (queryRunner) => {
+        const rows = (await queryRunner.query(
+          `
+            SELECT
+              a.id AS "accountId",
+              a.code AS "code",
+              a.name AS "name",
+              a.type AS "type",
+              (a.code = '100' OR a.code LIKE '100.%') AS "isCash",
+              COALESCE(
+                SUM(
+                  CASE
+                    WHEN t.id IS NULL THEN 0
+                    ELSE ${SIGNED_ENTRY_SQL}
+                  END
+                ),
+                0
+              )::text AS "balanceMinor"
+            FROM accounts a
+            LEFT JOIN entries e
+              ON e.business_id = a.business_id
+             AND e.account_id = a.id
+            LEFT JOIN transactions t
+              ON t.business_id = e.business_id
+             AND t.id = e.transaction_id
+             AND t.status IN ('POSTED', 'REVERSED')
+             AND t.currency = $2
+            WHERE a.business_id = $1
+            GROUP BY a.id, a.code, a.name, a.type
+            ORDER BY a.code ASC, a.name ASC, a.id ASC
+          `,
+          [input.businessId, currency],
+        )) as AccountBalanceRow[];
 
-      const accounts = rows.map((row) => ({
-        accountId: row.accountId,
-        code: row.code,
-        name: row.name,
-        type: row.type,
-        isCash: Boolean(row.isCash),
-        balance: toMoneyDto(row.balanceMinor, currency),
-      }));
-      const netCashMinor = sumMinorStrings(
-        rows
-          .filter((row) => Boolean(row.isCash))
-          .map((row) => row.balanceMinor),
-      );
+        const accounts = rows.map((row) => ({
+          accountId: row.accountId,
+          code: row.code,
+          name: row.name,
+          type: row.type,
+          isCash: Boolean(row.isCash),
+          balance: toMoneyDto(row.balanceMinor, currency),
+        }));
+        const netCashMinor = sumMinorStrings(
+          rows
+            .filter((row) => Boolean(row.isCash))
+            .map((row) => row.balanceMinor),
+        );
 
-      return {
-        businessId: input.businessId,
-        currency,
-        generatedAt: new Date().toISOString(),
-        netCash: toMoneyDto(netCashMinor, currency),
-        accounts,
-      };
-    });
+        return {
+          businessId: input.businessId,
+          currency,
+          generatedAt: new Date().toISOString(),
+          netCash: toMoneyDto(netCashMinor, currency),
+          accounts,
+        };
+      });
+    } finally {
+      this.recordReportLatency('cash_position', startedAt);
+    }
   }
 
   async getIncomeStatement(
     input: IncomeStatementInput,
   ): Promise<IncomeStatementReportDto> {
+    const startedAt = Date.now();
     const currency = normalizeCurrency(input.currency);
     const period = computeReportPeriod(input.from, input.to, input.timezone);
 
-    return this.withReadOnlyQueryRunner(async (queryRunner) => {
-      const rows = (await queryRunner.query(
-        `
+    try {
+      return await this.withReadOnlyQueryRunner(async (queryRunner) => {
+        const rows = (await queryRunner.query(
+          `
           SELECT
             COALESCE(
               SUM(
@@ -175,49 +192,54 @@ export class ReportsService {
             AND t.occurred_at >= $3
             AND t.occurred_at < $4
         `,
-        [
-          input.businessId,
+          [
+            input.businessId,
+            currency,
+            new Date(period.startUtc),
+            new Date(period.endUtcExclusive),
+          ],
+        )) as IncomeStatementRow[];
+
+        const row = rows[0] ?? { revenueMinor: '0', expensesMinor: '0' };
+        const netIncomeMinor = subtractMinorStrings(
+          row.revenueMinor,
+          row.expensesMinor,
+        );
+
+        return {
+          businessId: input.businessId,
           currency,
-          new Date(period.startUtc),
-          new Date(period.endUtcExclusive),
-        ],
-      )) as IncomeStatementRow[];
-
-      const row = rows[0] ?? { revenueMinor: '0', expensesMinor: '0' };
-      const netIncomeMinor = subtractMinorStrings(
-        row.revenueMinor,
-        row.expensesMinor,
-      );
-
-      return {
-        businessId: input.businessId,
-        currency,
-        generatedAt: new Date().toISOString(),
-        period,
-        revenue: toMoneyDto(row.revenueMinor, currency),
-        expenses: toMoneyDto(row.expensesMinor, currency),
-        netIncome: toMoneyDto(netIncomeMinor, currency),
-      };
-    });
+          generatedAt: new Date().toISOString(),
+          period,
+          revenue: toMoneyDto(row.revenueMinor, currency),
+          expenses: toMoneyDto(row.expensesMinor, currency),
+          netIncome: toMoneyDto(netIncomeMinor, currency),
+        };
+      });
+    } finally {
+      this.recordReportLatency('income_statement', startedAt);
+    }
   }
 
   async getAccountStatement(
     input: AccountStatementInput,
   ): Promise<AccountStatementReportDto> {
+    const startedAt = Date.now();
     const currency = normalizeCurrency(input.currency);
     const period = computeReportPeriod(input.from, input.to, input.timezone);
     const limit = normalizeLimit(input.limit);
     const offset = normalizeOffset(input.offset);
 
-    return this.withReadOnlyQueryRunner(async (queryRunner) => {
-      const account = await this.findBusinessAccount(
-        queryRunner,
-        input.businessId,
-        input.accountId,
-      );
+    try {
+      return await this.withReadOnlyQueryRunner(async (queryRunner) => {
+        const account = await this.findBusinessAccount(
+          queryRunner,
+          input.businessId,
+          input.accountId,
+        );
 
-      const countRows = (await queryRunner.query(
-        `
+        const countRows = (await queryRunner.query(
+          `
           SELECT COUNT(*)::text AS "total"
           FROM (
             SELECT t.id
@@ -234,17 +256,17 @@ export class ReportsService {
             GROUP BY t.id
           ) tx
         `,
-        [
-          input.businessId,
-          input.accountId,
-          currency,
-          new Date(period.startUtc),
-          new Date(period.endUtcExclusive),
-        ],
-      )) as StatementCountRow[];
+          [
+            input.businessId,
+            input.accountId,
+            currency,
+            new Date(period.startUtc),
+            new Date(period.endUtcExclusive),
+          ],
+        )) as StatementCountRow[];
 
-      const openingRows = (await queryRunner.query(
-        `
+        const openingRows = (await queryRunner.query(
+          `
           SELECT COALESCE(SUM(${SIGNED_ENTRY_SQL}), 0)::text AS "openingBalanceMinor"
           FROM entries e
           JOIN accounts a
@@ -259,19 +281,19 @@ export class ReportsService {
             AND t.currency = $3
             AND t.occurred_at < $4
         `,
-        [
-          input.businessId,
-          input.accountId,
-          currency,
-          new Date(period.startUtc),
-        ],
-      )) as StatementOpeningRow[];
+          [
+            input.businessId,
+            input.accountId,
+            currency,
+            new Date(period.startUtc),
+          ],
+        )) as StatementOpeningRow[];
 
-      const openingBalanceMinor =
-        openingRows[0]?.openingBalanceMinor?.toString() ?? '0';
+        const openingBalanceMinor =
+          openingRows[0]?.openingBalanceMinor?.toString() ?? '0';
 
-      const lineRows = (await queryRunner.query(
-        `
+        const lineRows = (await queryRunner.query(
+          `
           WITH account_tx AS (
             SELECT
               t.id AS "transactionId",
@@ -317,41 +339,54 @@ export class ReportsService {
           ORDER BY "occurredAt" ASC, "postedAt" ASC, "transactionId" ASC
           LIMIT $7 OFFSET $8
         `,
-        [
-          input.businessId,
-          input.accountId,
+          [
+            input.businessId,
+            input.accountId,
+            currency,
+            new Date(period.startUtc),
+            new Date(period.endUtcExclusive),
+            openingBalanceMinor,
+            limit,
+            offset,
+          ],
+        )) as StatementLineRow[];
+
+        return {
+          businessId: input.businessId,
+          accountId: input.accountId,
+          accountCode: account.code,
+          accountName: account.name,
+          accountType: account.type,
           currency,
-          new Date(period.startUtc),
-          new Date(period.endUtcExclusive),
-          openingBalanceMinor,
+          generatedAt: new Date().toISOString(),
+          period,
+          openingBalance: toMoneyDto(openingBalanceMinor, currency),
           limit,
           offset,
-        ],
-      )) as StatementLineRow[];
+          total: Number(countRows[0]?.total ?? 0),
+          lines: lineRows.map((row) => ({
+            transactionId: row.transactionId,
+            occurredAt: row.occurredAt.toISOString(),
+            postedAt: row.postedAt.toISOString(),
+            description: row.description,
+            delta: toMoneyDto(row.deltaMinor, currency),
+            runningBalance: toMoneyDto(row.runningBalanceMinor, currency),
+          })),
+        };
+      });
+    } finally {
+      this.recordReportLatency('account_statement', startedAt);
+    }
+  }
 
-      return {
-        businessId: input.businessId,
-        accountId: input.accountId,
-        accountCode: account.code,
-        accountName: account.name,
-        accountType: account.type,
-        currency,
-        generatedAt: new Date().toISOString(),
-        period,
-        openingBalance: toMoneyDto(openingBalanceMinor, currency),
-        limit,
-        offset,
-        total: Number(countRows[0]?.total ?? 0),
-        lines: lineRows.map((row) => ({
-          transactionId: row.transactionId,
-          occurredAt: row.occurredAt.toISOString(),
-          postedAt: row.postedAt.toISOString(),
-          description: row.description,
-          delta: toMoneyDto(row.deltaMinor, currency),
-          runningBalance: toMoneyDto(row.runningBalanceMinor, currency),
-        })),
-      };
-    });
+  private recordReportLatency(report: string, startedAt: number): void {
+    this.metrics?.observe(
+      'kasicash_report_latency_ms',
+      Date.now() - startedAt,
+      {
+        report,
+      },
+    );
   }
 
   private async findBusinessAccount(
@@ -400,12 +435,20 @@ export class ReportsService {
 
 function normalizeLimit(raw?: number): number {
   const value = Number(raw ?? DEFAULT_STATEMENT_LIMIT);
-  if (!Number.isInteger(value) || value < 1) return DEFAULT_STATEMENT_LIMIT;
-  return Math.min(value, MAX_STATEMENT_LIMIT);
+  if (!Number.isInteger(value) || value < 1 || value > MAX_STATEMENT_LIMIT) {
+    throw new BadRequestException(
+      `limit must be an integer from 1 to ${MAX_STATEMENT_LIMIT}`,
+    );
+  }
+  return value;
 }
 
 function normalizeOffset(raw?: number): number {
   const value = Number(raw ?? 0);
-  if (!Number.isInteger(value) || value < 0) return 0;
+  if (!Number.isInteger(value) || value < 0 || value > MAX_STATEMENT_OFFSET) {
+    throw new BadRequestException(
+      `offset must be an integer from 0 to ${MAX_STATEMENT_OFFSET}`,
+    );
+  }
   return value;
 }

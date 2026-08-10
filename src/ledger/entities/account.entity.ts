@@ -41,7 +41,7 @@ export class Account {
   @Column({ name: 'business_id', type: 'uuid' })
   businessId: string;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
   @OneToMany(() => Entry, (entry) => entry.account)

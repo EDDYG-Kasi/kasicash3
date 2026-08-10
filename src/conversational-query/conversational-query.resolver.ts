@@ -1,3 +1,5 @@
+import { isProxy } from 'node:util/types';
+
 export const CONVERSATIONAL_QUERY_RESOLVER = Symbol(
   'CONVERSATIONAL_QUERY_RESOLVER',
 );
@@ -22,8 +24,11 @@ export type PeriodProposal =
 
 export type ResolvedConversationalQuery =
   | { kind: 'NOT_QUERY' }
-  | { kind: 'CLARIFY'; question: string }
-  | { kind: 'OUT_OF_SCOPE'; reason: string }
+  | { kind: 'CLARIFY'; reason: 'QUERY_TYPE' | 'PERIOD' | 'ACCOUNT' }
+  | {
+      kind: 'OUT_OF_SCOPE';
+      reason: 'UNSUPPORTED' | 'UNSAFE_INSTRUCTIONS';
+    }
   | { kind: 'CASH_BALANCE'; currency?: string }
   | {
       kind: 'INCOME_STATEMENT';
@@ -58,9 +63,7 @@ export interface ConversationalQueryResolverInput {
 }
 
 export interface ConversationalQueryResolver {
-  resolve(
-    input: ConversationalQueryResolverInput,
-  ): Promise<ResolvedConversationalQuery>;
+  resolve(input: ConversationalQueryResolverInput): Promise<unknown>;
 }
 
 export class HeuristicConversationalQueryResolver implements ConversationalQueryResolver {
@@ -80,7 +83,7 @@ function resolveHeuristic(
   if (hasPromptInjectionShape(normalized)) {
     return {
       kind: 'OUT_OF_SCOPE',
-      reason: 'Unsafe query instructions are not supported',
+      reason: 'UNSAFE_INSTRUCTIONS',
     };
   }
 
@@ -119,12 +122,193 @@ function resolveHeuristic(
   if (isQueryLike(normalized)) {
     return {
       kind: 'CLARIFY',
-      question:
-        'Do you want your cash balance, sales and expenses for a period, or recent transactions?',
+      reason: 'QUERY_TYPE',
     };
   }
 
   return { kind: 'NOT_QUERY' };
+}
+
+export function validateResolvedConversationalQuery(
+  value: unknown,
+): ResolvedConversationalQuery {
+  const result = ownDataRecord(value);
+  if (typeof result.kind !== 'string') {
+    throw new Error('Invalid resolver result');
+  }
+  switch (result.kind) {
+    case 'NOT_QUERY':
+      assertExactKeys(result, ['kind']);
+      return { kind: 'NOT_QUERY' };
+    case 'CLARIFY': {
+      assertExactKeys(result, ['kind', 'reason']);
+      const reason = result.reason;
+      if (
+        reason !== 'QUERY_TYPE' &&
+        reason !== 'PERIOD' &&
+        reason !== 'ACCOUNT'
+      ) {
+        throw new Error('Invalid clarification reason');
+      }
+      return { kind: 'CLARIFY', reason };
+    }
+    case 'OUT_OF_SCOPE': {
+      assertExactKeys(result, ['kind', 'reason']);
+      const reason = result.reason;
+      if (reason !== 'UNSUPPORTED' && reason !== 'UNSAFE_INSTRUCTIONS') {
+        throw new Error('Invalid out-of-scope reason');
+      }
+      return { kind: 'OUT_OF_SCOPE', reason };
+    }
+    case 'CASH_BALANCE': {
+      assertExactKeys(result, ['kind', 'currency']);
+      const currency = optionalBoundedString(result.currency, 3);
+      return currency === undefined
+        ? { kind: 'CASH_BALANCE' }
+        : { kind: 'CASH_BALANCE', currency };
+    }
+    case 'INCOME_STATEMENT': {
+      assertExactKeys(result, ['kind', 'period', 'currency']);
+      const period = normalizePeriod(result.period);
+      const currency = optionalBoundedString(result.currency, 3);
+      return currency === undefined
+        ? { kind: 'INCOME_STATEMENT', period }
+        : { kind: 'INCOME_STATEMENT', period, currency };
+    }
+    case 'ACCOUNT_SPEND': {
+      assertExactKeys(result, ['kind', 'accountHint', 'period', 'currency']);
+      const accountHint = optionalBoundedString(result.accountHint, 100);
+      const period = normalizePeriod(result.period);
+      const currency = optionalBoundedString(result.currency, 3);
+      return compactOptionalFields({
+        kind: 'ACCOUNT_SPEND' as const,
+        accountHint,
+        period,
+        currency,
+      });
+    }
+    case 'RECENT_TRANSACTIONS': {
+      assertExactKeys(result, [
+        'kind',
+        'accountHint',
+        'limit',
+        'period',
+        'currency',
+      ]);
+      const accountHint = optionalBoundedString(result.accountHint, 100);
+      const currency = optionalBoundedString(result.currency, 3);
+      const limit = result.limit;
+      if (
+        limit !== undefined &&
+        (typeof limit !== 'number' || !Number.isSafeInteger(limit))
+      ) {
+        throw new Error('Invalid query limit');
+      }
+      const period =
+        result.period === undefined
+          ? undefined
+          : normalizePeriod(result.period);
+      return compactOptionalFields({
+        kind: 'RECENT_TRANSACTIONS' as const,
+        accountHint,
+        limit,
+        period,
+        currency,
+      });
+    }
+    default:
+      throw new Error('Unsupported resolver result');
+  }
+}
+
+function normalizePeriod(value: unknown): PeriodProposal {
+  if (
+    typeof value === 'string' &&
+    [
+      'TODAY',
+      'YESTERDAY',
+      'THIS_WEEK',
+      'LAST_WEEK',
+      'THIS_MONTH',
+      'LAST_MONTH',
+    ].includes(value)
+  ) {
+    return value as PeriodProposal;
+  }
+  const period = ownDataRecord(value);
+  assertExactKeys(period, ['from', 'to']);
+  if (isLocalDate(period.from) && isLocalDate(period.to)) {
+    return { from: period.from, to: period.to };
+  }
+  throw new Error('Invalid query period');
+}
+
+function optionalBoundedString(
+  value: unknown,
+  maximumLength: number,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    value.length > maximumLength
+  ) {
+    throw new Error('Invalid resolver string');
+  }
+  return value;
+}
+
+function assertExactKeys(
+  value: Record<string, unknown>,
+  allowed: string[],
+): void {
+  if (Object.keys(value).some((key) => !allowed.includes(key))) {
+    throw new Error('Resolver result contained unexpected fields');
+  }
+}
+
+function ownDataRecord(value: unknown): Record<string, unknown> {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    isProxy(value)
+  ) {
+    throw new Error('Invalid resolver object');
+  }
+  const prototype = Reflect.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error('Resolver result must be a plain object');
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key === 'symbol')) {
+    throw new Error('Resolver result contained symbol fields');
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const copy: Record<string, unknown> = Object.create(null) as Record<
+    string,
+    unknown
+  >;
+  for (const key of keys as string[]) {
+    const descriptor = descriptors[key];
+    if (!descriptor?.enumerable || !('value' in descriptor)) {
+      throw new Error(
+        'Resolver result must contain own enumerable data fields',
+      );
+    }
+    copy[key] = descriptor.value;
+  }
+  return copy;
+}
+
+function compactOptionalFields<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, field]) => field !== undefined),
+  ) as T;
+}
+
+function isLocalDate(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 export type MessageRoute = 'QUERY' | 'TRANSACTION' | 'FALLBACK';

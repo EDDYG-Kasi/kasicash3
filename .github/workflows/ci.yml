@@ -36,11 +36,38 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      - run: npm audit --audit-level=moderate
       - run: npm run build
       - run: npm run lint
+      - run: npm run verify:text
+      - name: Check whitespace and line endings
+        run: git diff --check
+      - name: Assert verification did not modify tracked files
+        run: git diff --exit-code
       - run: npm test
       - run: npm run test:integration
       - run: npm run migration:run
+      - name: Run documented development smoke test
+        env:
+          NODE_ENV: development
+          KASICASH_DB_MODE: postgres
+          KASICASH_WHATSAPP_MODE: log
+          KASICASH_DEV_TOOLS: "true"
+          KASICASH_DEV_TOOLS_TOKEN: ci-smoke-token
+          KASICASH_AUTH_COOKIE_SECURE: "false"
+        run: |
+          npm run start:prod > /tmp/kasicash-smoke.log 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:3000/health >/dev/null && break
+            sleep 1
+          done
+          response=$(curl -fsS -X POST http://127.0.0.1:3000/dev/whatsapp/text \
+            -H "Content-Type: application/json" \
+            -H "x-kasicash-dev-token: ci-smoke-token" \
+            -d '{"text":"sold airtime R30","messageId":"ci.smoke.1"}')
+          node -e 'const value=JSON.parse(process.argv[1]); if (!value.ok || !value.stored || !value.processed) process.exit(1)' "$response"
       - run: npm run migration:revert
       - run: npm run migration:run
       - run: npm run migration:revert:all
@@ -49,6 +76,9 @@ jobs:
           PGPASSWORD: postgres
         run: |
           remaining=$(psql -h localhost -U postgres -d kasicash -tAc \
-            "SELECT COALESCE((SELECT COUNT(*) FROM migrations), 0)" 2>/dev/null || echo 0)
+            "SELECT COALESCE((SELECT COUNT(*) FROM migrations), 0)")
+          case "$remaining" in
+            ''|*[!0-9]*) echo "invalid migration count"; exit 1 ;;
+          esac
           echo "executed migrations remaining: $remaining"
           test "$remaining" = "0"

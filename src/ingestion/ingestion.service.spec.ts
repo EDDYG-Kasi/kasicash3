@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { verifyWhatsAppSignature } from './whatsapp-signature.util';
 import { DevController } from './dev.controller';
 import { WhatsAppController } from './whatsapp.controller';
+import { WhatsAppDeliveryError } from './whatsapp.client';
 import {
   IngestionService,
   WaWebhookPayload,
@@ -50,15 +51,22 @@ describe('WhatsAppController verification handshake', () => {
   const config = {
     get: (k: string) => (k === 'WHATSAPP_VERIFY_TOKEN' ? 'tok' : undefined),
   } as unknown as ConfigService;
-  const controller = new WhatsAppController({} as IngestionService, config);
+  const controller = new WhatsAppController(
+    {} as IngestionService,
+    config,
+    allowRateLimiter(),
+    allowWebhookSecurity(),
+  );
 
-  it('echoes the challenge on a valid subscribe', () => {
-    expect(controller.verify('subscribe', 'tok', '12345')).toBe('12345');
+  it('echoes the challenge on a valid subscribe', async () => {
+    await expect(
+      controller.verify(fakeRequest(), 'subscribe', 'tok', '12345'),
+    ).resolves.toBe('12345');
   });
-  it('rejects a bad verify token', () => {
-    expect(() => controller.verify('subscribe', 'wrong', '12345')).toThrow(
-      ForbiddenException,
-    );
+  it('rejects a bad verify token', async () => {
+    await expect(
+      controller.verify(fakeRequest(), 'subscribe', 'wrong', '12345'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
 
@@ -73,25 +81,93 @@ describe('WhatsAppController POST (signature gate)', () => {
 
   it('ingests and returns EVENT_RECEIVED on a valid signature', async () => {
     const ingestion = {
-      ingestWebhook: jest.fn().mockResolvedValue({ stored: 1, duplicates: 0 }),
+      ingestSignedWebhook: jest
+        .fn()
+        .mockResolvedValue({ stored: 1, duplicates: 0 }),
     } as unknown as IngestionService;
-    const controller = new WhatsAppController(ingestion, config);
-    const req = { rawBody: raw } as any;
-    const res = await controller.receive(req, { ok: 1 } as any, sig);
+    const webhookSecurity = allowWebhookSecurity();
+    const controller = new WhatsAppController(
+      ingestion,
+      config,
+      allowRateLimiter(),
+      webhookSecurity,
+    );
+    const req = fakeRequest(raw);
+    const res = await controller.receive(req, sig);
     expect(res).toBe('EVENT_RECEIVED');
-    expect((ingestion as any).ingestWebhook).toHaveBeenCalledTimes(1);
+    expect((ingestion as any).ingestSignedWebhook).toHaveBeenCalledWith(
+      raw,
+      sig,
+      262144,
+    );
   });
 
   it('rejects a bad signature with 401 and never calls ingestion', async () => {
     const ingestion = {
-      ingestWebhook: jest.fn(),
+      ingestSignedWebhook: jest.fn(),
     } as unknown as IngestionService;
-    const controller = new WhatsAppController(ingestion, config);
-    const req = { rawBody: raw } as any;
+    const controller = new WhatsAppController(
+      ingestion,
+      config,
+      allowRateLimiter(),
+      allowWebhookSecurity(),
+    );
+    const req = fakeRequest(raw);
     await expect(
-      controller.receive(req, { ok: 1 } as any, 'sha256=deadbeef'),
+      controller.receive(req, 'sha256=deadbeef'),
     ).rejects.toBeInstanceOf(UnauthorizedException);
-    expect((ingestion as any).ingestWebhook).not.toHaveBeenCalled();
+    expect((ingestion as any).ingestSignedWebhook).not.toHaveBeenCalled();
+  });
+
+  it('delegates replay decisions to the durable ingestion record', async () => {
+    const ingestion = {
+      ingestSignedWebhook: jest
+        .fn()
+        .mockResolvedValue({ stored: 0, duplicates: 0 }),
+    } as unknown as IngestionService;
+    const webhookSecurity = allowWebhookSecurity();
+    const controller = new WhatsAppController(
+      ingestion,
+      config,
+      allowRateLimiter(),
+      webhookSecurity,
+    );
+
+    await expect(controller.receive(fakeRequest(raw), sig)).resolves.toBe(
+      'EVENT_RECEIVED',
+    );
+    expect((ingestion as any).ingestSignedWebhook).toHaveBeenCalledWith(
+      raw,
+      sig,
+      262144,
+    );
+  });
+
+  it('delegates authenticated over-policy webhooks for durable quarantine', async () => {
+    const ingestion = {
+      ingestSignedWebhook: jest.fn().mockResolvedValue({
+        stored: 0,
+        duplicates: 0,
+      }),
+    } as unknown as IngestionService;
+    const webhookSecurity = allowWebhookSecurity({
+      maxRawBodyBytes: jest.fn().mockReturnValue(raw.length - 1),
+    });
+    const controller = new WhatsAppController(
+      ingestion,
+      config,
+      allowRateLimiter(),
+      webhookSecurity,
+    );
+
+    await expect(controller.receive(fakeRequest(raw), sig)).resolves.toBe(
+      'EVENT_RECEIVED',
+    );
+    expect((ingestion as any).ingestSignedWebhook).toHaveBeenCalledWith(
+      raw,
+      sig,
+      raw.length - 1,
+    );
   });
 });
 
@@ -102,6 +178,7 @@ describe('IngestionService', () => {
     parsingOverrides: any = {},
     queryImpl?: any,
     conversationalOverrides: any = {},
+    observabilityOverrides: any = {},
   ) => {
     const query =
       queryImpl ??
@@ -114,6 +191,7 @@ describe('IngestionService', () => {
           message_type: 'text',
           wa_timestamp: new Date('2026-01-01T10:00:00Z'),
           received_at: new Date('2026-01-01T10:00:05Z'),
+          attempts: 0,
         },
       ]); // claim wins
     const manager = {
@@ -153,6 +231,8 @@ describe('IngestionService', () => {
       parsing,
       conversationalQueries,
       wa,
+      observabilityOverrides.metrics,
+      observabilityOverrides.shutdown,
     );
     return {
       service,
@@ -316,6 +396,109 @@ describe('IngestionService', () => {
     expect(manager.save).not.toHaveBeenCalled();
   });
 
+  it('durably quarantines a malformed signed delivery with exact raw bytes', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ id: 'delivery-1', status: 'RECEIVED' }]);
+    const { service, manager } = makeService({}, {}, {}, query);
+    const malformed: WaWebhookPayload = {
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                messages: [
+                  {
+                    id: '',
+                    from: 'not-a-phone',
+                    timestamp: 'bad',
+                    type: 'text',
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const rawBody = Buffer.from(JSON.stringify(malformed));
+
+    await expect(
+      service.ingestSignedWebhook(rawBody, 'sha256=valid'),
+    ).resolves.toEqual({ stored: 0, duplicates: 0 });
+
+    expect(query.mock.calls[0][1][2]).toEqual(rawBody);
+    expect(manager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      'delivery-1',
+      expect.objectContaining({
+        status: 'QUARANTINED',
+        errorCode: 'MALFORMED_MESSAGE',
+      }),
+    );
+  });
+
+  it('persists exact invalid JSON bytes and terminally quarantines the delivery', async () => {
+    const rawBody = Buffer.from('{"entry":');
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ id: 'delivery-json', status: 'RECEIVED' }]);
+    const { service, manager } = makeService({}, {}, {}, query);
+
+    await expect(
+      service.ingestSignedWebhook(rawBody, 'sha256=valid'),
+    ).resolves.toEqual({ stored: 0, duplicates: 0 });
+    expect(query.mock.calls[0][1][2]).toEqual(rawBody);
+    expect(manager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      'delivery-json',
+      expect.objectContaining({
+        status: 'QUARANTINED',
+        errorCode: 'INVALID_JSON',
+      }),
+    );
+  });
+
+  it('persists authenticated over-policy bytes before terminal quarantine', async () => {
+    const rawBody = Buffer.from('{"large":true}');
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ id: 'delivery-large', status: 'RECEIVED' }]);
+    const { service, manager } = makeService({}, {}, {}, query);
+
+    await expect(
+      service.ingestSignedWebhook(rawBody, 'sha256=valid', rawBody.length - 1),
+    ).resolves.toEqual({ stored: 0, duplicates: 0 });
+
+    expect(query.mock.calls[0][1][2]).toEqual(rawBody);
+    expect(manager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      'delivery-large',
+      expect.objectContaining({
+        status: 'QUARANTINED',
+        errorCode: 'PAYLOAD_TOO_LARGE',
+      }),
+    );
+  });
+
+  it('quarantines an empty object and does not leave it RECEIVED', async () => {
+    const rawBody = Buffer.from('{}');
+    const query = jest
+      .fn()
+      .mockResolvedValue([{ id: 'delivery-schema', status: 'RECEIVED' }]);
+    const { service, manager } = makeService({}, {}, {}, query);
+
+    await service.ingestSignedWebhook(rawBody, 'sha256=valid');
+    expect(manager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      'delivery-schema',
+      expect.objectContaining({
+        status: 'QUARANTINED',
+        errorCode: 'INVALID_SCHEMA',
+      }),
+    );
+  });
+
   it('marks the message FAILED when processing throws', async () => {
     const { service, manager } = makeService(
       {},
@@ -328,7 +511,7 @@ describe('IngestionService', () => {
     await service.processMessage('im-1');
     expect(manager.update).toHaveBeenCalledWith(
       expect.anything(),
-      'im-1',
+      expect.objectContaining({ id: 'im-1', status: 'PROCESSING' }),
       expect.objectContaining({ status: 'FAILED' }),
     );
   });
@@ -338,7 +521,7 @@ describe('IngestionService', () => {
     await service.processMessage('im-1', 'Thabo');
     expect(manager.update).toHaveBeenCalledWith(
       expect.anything(),
-      'im-1',
+      expect.objectContaining({ id: 'im-1', status: 'PROCESSING' }),
       expect.objectContaining({ status: 'PROCESSED', businessId: 'b-1' }),
     );
     expect(wa.sendText).toHaveBeenCalledWith(
@@ -376,7 +559,7 @@ describe('IngestionService', () => {
     );
     expect(manager.update).toHaveBeenCalledWith(
       expect.anything(),
-      'im-1',
+      expect.objectContaining({ id: 'im-1', status: 'PROCESSING' }),
       expect.objectContaining({ status: 'PROCESSED', businessId: 'b-1' }),
     );
     expect(wa.sendText).toHaveBeenCalledWith(
@@ -400,6 +583,7 @@ describe('IngestionService', () => {
           kind: 'SALE',
           amountMinor: '3000',
           proposalId: 'proposal-1',
+          proposalRef: 'ABCDEF123456',
         }),
       },
     );
@@ -407,12 +591,12 @@ describe('IngestionService', () => {
 
     expect(manager.update).toHaveBeenCalledWith(
       expect.anything(),
-      'im-1',
+      expect.objectContaining({ id: 'im-1', status: 'PROCESSING' }),
       expect.objectContaining({ status: 'PROCESSED', businessId: 'b-1' }),
     );
     expect(wa.sendText).toHaveBeenCalledWith(
       '27831234567',
-      'I think this is a sale of R30.00. Reply YES to record it, or NO to cancel.',
+      'I think this is a sale of R30.00 (ref ABCDEF123456). Reply YES to record it, or NO to cancel.',
     );
   });
 
@@ -447,7 +631,7 @@ describe('IngestionService', () => {
     expect((parsing as any).parseAndPost).not.toHaveBeenCalled();
     expect(manager.update).toHaveBeenCalledWith(
       expect.anything(),
-      'im-1',
+      expect.objectContaining({ id: 'im-1', status: 'PROCESSING' }),
       expect.objectContaining({ status: 'PROCESSED', businessId: 'b-1' }),
     );
     expect(wa.sendText).toHaveBeenCalledWith(
@@ -464,9 +648,90 @@ describe('IngestionService', () => {
     expect(wa.sendText).not.toHaveBeenCalled();
   });
 
+  it('claims with fencing and blocks a sender message behind earlier work', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const { service } = makeService({}, {}, {}, query);
+
+    await service.processMessage('im-2');
+
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain('claim_token = $3');
+    expect(sql).toContain('lease_expires_at = $2');
+    expect(sql).toContain('earlier.wa_from = inbound_messages.wa_from');
+    expect(sql).toContain(
+      'earlier.ingest_sequence < inbound_messages.ingest_sequence',
+    );
+  });
+
+  it('does not send a reply when a late worker loses its claim token', async () => {
+    const { service, manager, wa } = makeService({
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
+    });
+
+    await service.processMessage('im-1');
+
+    expect(manager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ claimToken: expect.any(String) }),
+      expect.objectContaining({ status: 'PROCESSED' }),
+    );
+    expect(wa.sendText).not.toHaveBeenCalled();
+  });
+
+  it('does not claim new work once graceful shutdown has started', async () => {
+    const shutdown = {
+      canStartWork: jest.fn().mockReturnValue(false),
+      track: jest.fn(),
+    };
+    const metrics = { increment: jest.fn() };
+    const { service, query, onboarding, wa } = makeService(
+      {},
+      {},
+      {},
+      undefined,
+      {},
+      { metrics, shutdown },
+    );
+
+    await expect(service.processMessage('im-1')).resolves.toBe(false);
+
+    expect(query).not.toHaveBeenCalled();
+    expect((onboarding as any).resolveOrCreateBusiness).not.toHaveBeenCalled();
+    expect(wa.sendText).not.toHaveBeenCalled();
+    expect(metrics.increment).toHaveBeenCalledWith(
+      'kasicash_ingestion_processing_total',
+      { result: 'skipped_shutdown' },
+    );
+  });
+
+  it('tracks in-flight processing so shutdown waits for the atomic claim path', async () => {
+    const shutdown = {
+      canStartWork: jest.fn().mockReturnValue(true),
+      track: jest.fn((work: () => Promise<boolean>) => work()),
+    };
+    const metrics = { increment: jest.fn() };
+    const { service, query } = makeService(
+      {},
+      {},
+      {},
+      undefined,
+      {},
+      { metrics, shutdown },
+    );
+
+    await expect(service.processMessage('im-1')).resolves.toBe(true);
+
+    expect(shutdown.track).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(metrics.increment).toHaveBeenCalledWith(
+      'kasicash_ingestion_processing_total',
+      { result: 'claimed' },
+    );
+  });
+
   it('records backoff and stays FAILED before attempts are exhausted', async () => {
     const { service, manager } = makeService(
-      { findOne: jest.fn().mockResolvedValue({ attempts: 0 }) },
+      {},
       {
         resolveOrCreateBusiness: jest
           .fn()
@@ -481,13 +746,27 @@ describe('IngestionService', () => {
   });
 
   it('moves a message to DEAD after exhausting attempts', async () => {
+    const claimAtFinalAttempt = jest.fn().mockResolvedValue([
+      {
+        wa_from: '27831234567',
+        wa_message_id: 'wamid.1',
+        payload_hash: 'hash-1',
+        text_body: 'sold 3 chips R30',
+        message_type: 'text',
+        wa_timestamp: new Date('2026-01-01T10:00:00Z'),
+        received_at: new Date('2026-01-01T10:00:05Z'),
+        attempts: MAX_ATTEMPTS - 1,
+      },
+    ]);
     const { service, manager } = makeService(
-      { findOne: jest.fn().mockResolvedValue({ attempts: MAX_ATTEMPTS - 1 }) },
+      {},
       {
         resolveOrCreateBusiness: jest
           .fn()
           .mockRejectedValue(new Error('still down')),
       },
+      {},
+      claimAtFinalAttempt,
     );
     await service.processMessage('im-1');
     const patch = manager.update.mock.calls.at(-1)[2];
@@ -498,7 +777,13 @@ describe('IngestionService', () => {
 
   it('treats reply send as best-effort: a send failure keeps the message PROCESSED', async () => {
     const { service, manager, wa } = makeService();
-    wa.sendText.mockRejectedValueOnce(new Error('whatsapp 500'));
+    wa.sendText.mockRejectedValueOnce(
+      new WhatsAppDeliveryError(
+        'RETRYABLE',
+        'WHATSAPP_PROVIDER_RETRYABLE_FAILURE',
+        500,
+      ),
+    );
     await service.processMessage('im-1', 'Thabo');
     // PROCESSED was written and NOT reverted to FAILED/DEAD by the send failure.
     const statuses = manager.update.mock.calls.map((c: any) => c[2].status);
@@ -517,7 +802,11 @@ describe('IngestionService', () => {
 
 describe('DevController', () => {
   const enabledConfig = {
-    get: (k: string) => (k === 'KASICASH_DEV_TOOLS' ? 'true' : undefined),
+    get: (k: string) =>
+      ({
+        KASICASH_DEV_TOOLS: 'true',
+        KASICASH_DEV_TOOLS_TOKEN: 'dev-token',
+      })[k],
   } as unknown as ConfigService;
   const disabledConfig = {
     get: () => undefined,
@@ -527,10 +816,18 @@ describe('DevController', () => {
     const ingestion = {
       ingestSyntheticText: jest.fn(),
     } as unknown as IngestionService;
-    const controller = new DevController(ingestion, disabledConfig);
+    const controller = new DevController(
+      ingestion,
+      disabledConfig,
+      allowRateLimiter(),
+    );
 
     await expect(
-      controller.simulateWhatsAppText({ text: 'sold R30 airtime' }),
+      controller.simulateWhatsAppText(
+        fakeRequest(),
+        { text: 'sold R30 airtime' },
+        'dev-token',
+      ),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect((ingestion as any).ingestSyntheticText).not.toHaveBeenCalled();
   });
@@ -545,14 +842,22 @@ describe('DevController', () => {
         waMessageId: 'dev.1',
       }),
     } as unknown as IngestionService;
-    const controller = new DevController(ingestion, enabledConfig);
+    const controller = new DevController(
+      ingestion,
+      enabledConfig,
+      allowRateLimiter(),
+    );
 
-    const result = await controller.simulateWhatsAppText({
-      from: '+27 83 123 4567',
-      text: '  sold   R30 airtime ',
-      contactName: '  Thabo  ',
-      messageId: 'dev.1',
-    });
+    const result = await controller.simulateWhatsAppText(
+      fakeRequest(),
+      {
+        from: '+27 83 123 4567',
+        text: '  sold   R30 airtime ',
+        contactName: '  Thabo  ',
+        messageId: 'dev.1',
+      },
+      'dev-token',
+    );
 
     expect((ingestion as any).ingestSyntheticText).toHaveBeenCalledWith({
       from: '27831234567',
@@ -567,13 +872,57 @@ describe('DevController', () => {
     const controller = new DevController(
       { ingestSyntheticText: jest.fn() } as unknown as IngestionService,
       enabledConfig,
+      allowRateLimiter(),
     );
 
-    await expect(controller.simulateWhatsAppText({})).rejects.toBeInstanceOf(
-      BadRequestException,
+    await expect(
+      controller.simulateWhatsAppText(fakeRequest(), {}, 'dev-token'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects a missing developer token even when developer tools are enabled', async () => {
+    const ingestion = {
+      ingestSyntheticText: jest.fn(),
+    } as unknown as IngestionService;
+    const controller = new DevController(
+      ingestion,
+      enabledConfig,
+      allowRateLimiter(),
     );
+
+    await expect(
+      controller.simulateWhatsAppText(
+        fakeRequest(),
+        { text: 'sold R30 airtime' },
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect((ingestion as any).ingestSyntheticText).not.toHaveBeenCalled();
   });
 });
+
+function allowRateLimiter() {
+  return {
+    assertAllowed: jest.fn(),
+  } as any;
+}
+
+function allowWebhookSecurity(overrides: Record<string, unknown> = {}) {
+  return {
+    maxRawBodyBytes: jest.fn().mockReturnValue(262144),
+    wasAcceptedRecently: jest.fn().mockResolvedValue(false),
+    recordAccepted: jest.fn().mockResolvedValue(undefined),
+    ...overrides,
+  } as any;
+}
+
+function fakeRequest(rawBody?: Buffer) {
+  return {
+    body: rawBody,
+    ip: '127.0.0.1',
+    socket: { remoteAddress: '127.0.0.1' },
+  } as any;
+}
 
 describe('RecoveryService', () => {
   const makeRecovery = (dueRows: any[]) => {
