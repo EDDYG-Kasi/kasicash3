@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Cleared the GitHub Actions `npm audit --audit-level=moderate` failure by
+  updating vulnerable transitive packages, aligning direct Nest 11 packages on
+  `11.2.5`, and overriding `multer` to `2.4.0` without changing application
+  behaviour.
 - Refactored the public website, auth pages, and dashboard around a shared
   KasiCash premium fintech design system with mobile-first spacing, typography,
   semantic colour tokens, focus states, dark-mode tokens, and the supplied
