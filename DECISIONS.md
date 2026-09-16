@@ -1,5 +1,15 @@
 # Architecture Decision Records
 
+## ADR 24: Dashboard website uses existing session auth and container deployment
+
+- **Date**: 2026-08-10
+- **Context**: The Phase 8 dashboard existed as a browser route, but a real website needs a browser login page, a deployable server shape, and an operator-safe way to create the first dashboard principal for an existing business.
+- **Login decision**: `GET /auth/login` serves a small browser login page that posts to the existing `POST /auth/login` endpoint. The existing AuthService still creates the session, the existing controller still sets the HttpOnly cookie, and the page redirects to `/dashboard` without storing bearer tokens in local or session storage.
+- **Deployment decision**: Add a standard Docker production image and deployment guide for Node/container hosts backed by managed PostgreSQL. GitHub Pages is explicitly not a real deployment target because it cannot run NestJS, PostgreSQL migrations, server-side auth, or tenant enforcement.
+- **Operator decision**: Add `npm run auth:create-principal` to create an auth principal for an existing `businesses.id`. This writes only auth metadata and never writes ledger transactions, entries, reports, analytics, or balances.
+- **Boundary decision**: The dashboard remains read-only and tenant-scoped from the authenticated principal. Deployment scaffolding does not relax production runtime validation, WhatsApp Cloud fail-closed config, secure cookie requirements, or any ledger invariant.
+- **Consequences**: KasiCash now has a usable browser website path (`/auth/login` to `/dashboard`) and a deployable container shape. Actual hosting still requires managed PostgreSQL, secret configuration, migrations, and a green CI run.
+
 ## ADR 23: WhatsApp Cloud outbound is version-pinned, sanitized, and best-effort
 
 - **Date**: 2026-08-10
@@ -66,13 +76,13 @@
 ## ADR 17: Phase 8 dashboard is a guarded read-only BFF over existing services
 
 - **Date**: 2026-08-01
-- **Context**: KasiCash needs a web dashboard, but real authentication and authorization are Phase 9. The constitution forbids new ledger-write paths, client-selected tenants, fabricated figures, and client-side money math.
+- **Context**: KasiCash needs a web dashboard. The constitution forbids new ledger-write paths, client-selected tenants, fabricated figures, and client-side money math. The original Phase 8 tenant stub has since been superseded by Phase 9 authentication.
 - **Decision**: Phase 8 adds `DashboardModule` with guarded `/dashboard` routes. The BFF calls Phase 4 `ReportsService`, Phase 6 `AnalyticsService`, and Phase 7 `AnomalyService.detectAnomalies()`. It does not call `LedgerService` and exposes no mutation endpoints.
-- **Tenant boundary**: `DashboardTenantGuard` obtains one server-configured business context from `DashboardTenantContextService`. The client cannot supply or override `businessId`, `currency`, or `timezone`. The routes are disabled unless `KASICASH_DASHBOARD_ENABLED=true` and `KASICASH_DASHBOARD_BUSINESS_ID` are set.
-- **Auth handoff**: The Phase 8 tenant guard is deliberately marked `PHASE_8_SERVER_STUB_NOT_PRODUCTION_AUTH` and `productionReady: false`. Phase 9 must replace it with authenticated user-to-business authorization while preserving server-side tenant scoping.
-- **Money and rendering**: The browser renderer displays `MoneyDto.formatted` values returned by existing read DTOs. It does not aggregate money, parse money with floats, or recompute financial figures. Server-side chart-scale metadata is non-financial presentation data derived from existing DTO amount strings.
+- **Tenant boundary**: `DashboardTenantGuard` obtains one authenticated principal-derived business context from `DashboardTenantContextService`. The client cannot supply or override `businessId`, `currency`, or `timezone`. Dashboard DTOs mark the boundary as `PHASE_9_AUTHENTICATED_PRINCIPAL` and `productionReady: true`.
+- **UI decision**: The dashboard uses a dependency-free TypeScript/HTML/CSS browser shell served by NestJS. This keeps Phase 8 testable without adding a second build system; React or another richer client can be introduced later if it preserves the same read-only and money-formatting tests.
+- **Money and rendering**: The browser renderer displays `MoneyDto.formatted` values returned by existing read DTOs. It does not aggregate money, parse money with floats, or recompute financial figures. Server-side chart-scale metadata now includes display-ready percentage strings for non-financial bar widths.
 - **Alerts**: Dashboard alert status reads use `SET TRANSACTION READ ONLY` against `anomaly_alerts` and remain scoped to the configured business. Alert metadata is not financial truth.
-- **Consequences**: Phase 8 gives a usable read-only dashboard without weakening ledger boundaries. Production auth/RBAC, dashboard write actions, real-time updates, responsive polish, i18n, and richer charting remain deferred.
+- **Consequences**: Phase 8 gives a polished read-only dashboard without weakening ledger boundaries. Dashboard write actions, real-time updates, i18n, formal accessibility audit, and richer charting remain deferred.
 
 ## ADR 16: Phase 7 anomalies are deterministic read-side detections with idempotent notification metadata
 

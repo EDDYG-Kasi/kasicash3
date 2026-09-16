@@ -26,6 +26,19 @@ GET /health
 
 Both should return JSON. If they do, the server is alive.
 
+The read-only dashboard website flow is:
+
+```text
+GET /auth/login
+GET /dashboard
+```
+
+Dashboard and report routes require a Phase 9 authenticated principal. Open
+`/auth/login` in the browser, sign in, then the page redirects to `/dashboard`.
+The browser cannot choose another tenant; business, currency, and timezone come
+from the authenticated principal. See `DEPLOYMENT_DASHBOARD.md` for putting the
+dashboard on a real hosted URL.
+
 ## Environment
 
 Set these in `.env`:

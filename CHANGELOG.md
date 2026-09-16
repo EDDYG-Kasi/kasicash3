@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+- Refactored the public website, auth pages, and dashboard around a shared
+  KasiCash premium fintech design system with mobile-first spacing, typography,
+  semantic colour tokens, focus states, dark-mode tokens, and the supplied
+  `Kc | KasiCash` brand lockup.
+- Added public static routes for Pricing, Fees and limits, Security centre,
+  Help/FAQ, Contact, About, Accessibility, Privacy policy, Terms, and Cookies;
+  all are presentation-only and make legal/commercial review
+  caveats explicit.
+- Expanded the About, Privacy policy, Terms of service, and Cookies
+  copy so those static pages have a fuller trader-facing KasiCash voice while
+  preserving draft/legal-review caveats and avoiding regulated overclaims.
+- Added `PUBLIC_PAGES_PERSONALITY_REVIEW_PROMPT.md` for focused independent
+  review of the public-page content pass.
+- Reworked the public website away from generic floating-card sections toward
+  a composed Apple-native fintech product page with a device scene, black proof
+  band, timeline-style flow, product status strip, and document-style legal
+  pages with tables of contents.
+- Remediated the AI visual review findings by replacing the desktop auth
+  viewport-gradient split with a real dark layout panel, keeping a simplified
+  product/device scene and navigation on mobile, reducing dashboard container
+  density, adding mobile money-movement rows, using contrast-correct small
+  green labels, and aligning signup/cookie/trust copy with the manual setup
+  and legal-review boundaries.
+- Remediated the round-2 visual review blockers by making the mobile navigation
+  visible below the desktop breakpoint, adding About and Dashboard login to the
+  mobile nav, using vivid green for small labels on black surfaces, standardising
+  public CTAs on `Request setup`, clarifying the email-draft handoff, and
+  softening the About-page tone.
+- Closed the round-3 visual-review polish notes by changing the setup page title
+  to `KasiCash Setup Request` and changing the generated email body to request
+  setup instead of saying sign up.
+- Closed the final closeout copy residue by replacing the remaining old
+  acquisition-page wording with `setup request page`.
+- Added quick dashboard date-range controls for `1W`, `1M`, `3M`, and `1Y`
+  without adding client-side money math or changing read-service contracts.
+- Added `PREMIUM_APP_REDESIGN_DESIGN.md`,
+  `PREMIUM_APP_REDESIGN_REVIEW_PROMPT.md`, and design-system renderer tests.
+- Added a branded public KasiCash marketing webpage at `GET /`, preserving the
+  previous machine-readable service root at `GET /api`.
+- Added a branded `GET /auth/signup` setup-request page and pointed public
+  homepage CTAs to request setup first, while keeping `GET /auth/login` for existing
+  dashboard users.
+- Added `PUBLIC_WEBSITE_DESIGN.md` and `PUBLIC_WEBSITE_REVIEW_PROMPT.md` for
+  independent review of the public-site presentation boundary.
+- Kept the public webpage static and non-financial: no ledger writes, no report
+  service calls, no client-side money math, and no fabricated money figures.
+- Added a browser login page at `GET /auth/login` that uses the existing
+  `POST /auth/login` HttpOnly cookie session flow and redirects authenticated
+  users to `/dashboard`.
+- Added dashboard website deployment scaffolding: `Dockerfile`, `.dockerignore`,
+  `DEPLOYMENT_DASHBOARD.md`, and `npm run auth:create-principal` for creating
+  the first non-financial dashboard principal for an existing business.
+- Documented that the real dashboard website needs a Node/container host plus
+  PostgreSQL; GitHub Pages can only host static mocks and cannot enforce the
+  KasiCash ledger/auth invariants.
 - Closed TD-3 locally by hardening and exercising the WhatsApp Cloud API outbound
   send path behind the existing `WhatsAppClient` abstraction.
 - Added version-pinned Graph API endpoint construction, documented text-message
@@ -95,10 +150,13 @@
 - Exported the existing `WHATSAPP_CLIENT` provider from `IngestionModule` so alert dispatch reuses the outbound abstraction.
 - Added Phase 7 unit tests for large expense, sales spike/drop, activity gap, boundary conditions, reversal-netted daily values, read-only detection SQL, no ledger mutation on dispatch, and alert idempotency.
 - Added a Testcontainers anomaly integration test that seeds posted history, a real `LedgerService` reversal, other-tenant noise, pending proposal noise, and verifies anomalies, figures, and one-send alert behavior against real PostgreSQL.
-- Phase 8 Web Dashboard: added a guarded read-only `/dashboard` BFF and dependency-free browser dashboard over Phase 4 reports, Phase 6 analytics, and Phase 7 anomaly/alert data.
-- Added `PHASE8_DASHBOARD_DESIGN.md` documenting endpoint contracts, service mappings, server-side tenant stub, DTO reuse, and front-end rendering boundaries.
-- Added explicit Phase 8 dashboard environment guard (`KASICASH_DASHBOARD_ENABLED` plus `KASICASH_DASHBOARD_BUSINESS_ID`) so unauthenticated dashboard routes are not production-exposed by default.
-- Added dashboard unit tests for server-side tenant scoping, read-only alert metadata access, and front-end rendering from formatted DTO money strings without client-side money parsing.
+- Phase 8 Web Dashboard: added a guarded read-only `/dashboard` BFF and polished dependency-free browser dashboard over Phase 4 reports, Phase 6 analytics, and Phase 7 anomaly/alert data.
+- Added period/account/as-of filters, KPI cards, responsive chart/table panels, recent account-statement rendering, alert rendering, and explicit loading/error/empty states.
+- Redesigned the dashboard for informal South African traders: plain-language headline insight, visible Sales minus Costs equals Profit reconciliation, SA rand display (`R 2 030.00`), labelled charts, mobile-first layout, and removal of internal phase/debug labels from the UI.
+- Applied the KasiCash brand sheet to dashboard and login surfaces: `Kc` lockup, vivid green `#00C853`, black `#0E0E0E`, warm ivory `#F7F6F1`, Poppins-first type stack, and `Simple to run. Easy to grow.` tagline.
+- Added `PHASE8_DASHBOARD_DESIGN.md` documenting endpoint contracts, service mappings, authenticated tenant context, DTO reuse, front-end rendering boundaries, and server-side chart-scale strings.
+- Added server-derived non-financial chart display widths so the browser paints charts without parsing minor units, using floats, or recomputing money.
+- Added dashboard unit tests for server-side tenant scoping, read-only alert metadata access, front-end rendering from formatted DTO money strings, empty-state handling, and no client-side money parsing.
 - Added a Testcontainers dashboard integration test that hits `/dashboard/api/overview` and verifies report/analytics figures, reversal netting, pending proposal exclusion, alert metadata scoping, and client-supplied tenant override containment against real PostgreSQL.
 - Phase 9 Security & Auth: added opaque server-side sessions, `AuthModule`, `AuthGuard`, `/auth/login`, `/auth/me`, and `/auth/logout`.
 - Replaced the Phase 8 dashboard tenant stub with authenticated principal-derived tenant context and protected `/reports/*` routes with the same server-side authorization.

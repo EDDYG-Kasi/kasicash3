@@ -1,6 +1,6 @@
 # Project Status
 
-**Current Phase:** Phases 1-10 implemented, independent-review rounds 1-3 remediated locally, and TD-3 WhatsApp Cloud outbound send hardening implemented locally; production readiness remains pending green real-PostgreSQL CI, an immutable commit/CI URL, manual Meta sandbox send evidence, and deployment validation.
+**Current Phase:** Phases 1-10 implemented, premium Phase 8 app/site redesign implemented locally across the public website, auth pages, and read-only dashboard, independent-review rounds 1-3 remediated locally, and TD-3 WhatsApp Cloud outbound send hardening implemented locally; production readiness remains pending green real-PostgreSQL CI, an immutable commit/CI URL, manual Meta sandbox send evidence, deployment validation, formal legal review, and accessibility/device testing.
 
 ## Phase 4 Delivered
 
@@ -14,22 +14,62 @@
 
 ## Validation
 
-- Local build passed on 2026-08-10 after TD-3 outbound integration.
-- Local ESLint passed on 2026-08-10 after TD-3 outbound integration.
-- Local Jest unit run passed on 2026-08-10: 28 suites, 203 tests.
-- Local text-hygiene verification passed on 2026-08-03 after normalizing LF and
-  removing trailing whitespace.
+- Local AI visual-review final copy cleanup passed on 2026-09-16: public
+  source/spec wording now uses `setup request page` rather than the residual
+  old acquisition-page phrase flagged in closeout review, with focused public/auth
+  renderer tests passing (4 suites, 17 tests), full Jest passing (32 suites,
+  228 tests), Nest build passing, ESLint passing, and text verification passing.
+- Local AI visual-review closeout polish passed on 2026-09-15: focused
+  renderer/controller tests passed (4 suites, 20 tests), full Jest passed (32
+  suites, 227 tests), Nest build passed, ESLint passed, and text verification
+  passed. This removes the residual generic `Sign Up` browser title and
+  generated email-body wording in favour of setup-request language.
+- Local AI visual-review round-2 remediation passed on 2026-09-15: focused
+  renderer/controller tests passed (5 suites, 25 tests), full Jest passed (32
+  suites, 227 tests), Nest build passed, ESLint passed, and text verification
+  passed. This specifically verifies visible mobile navigation, About and
+  Dashboard login mobile links, dark-surface label contrast treatment,
+  `Request setup` wording, and the email-draft handoff language.
+- Local AI visual-review remediation passed on 2026-09-15: focused
+  renderer/controller tests passed (5 suites, 24 tests), full Jest passed (32
+  suites, 226 tests), Nest build passed, ESLint passed, and text verification
+  passed. The first HTTP smoke attempt found no server listening on
+  `127.0.0.1:3000`, so preview availability was restarted separately and is not
+  counted as database-backed CI evidence.
+- Local Apple-restraint public/auth redesign correction passed on 2026-09-14:
+  focused renderer/controller tests passed (5 suites, 21 tests), full Jest
+  passed (32 suites, 226 tests), Nest build passed, ESLint passed, text
+  verification passed, and HTTP preview checks passed for the homepage, signup,
+  privacy, and terms routes.
+- Local premium app redesign renderer/controller tests passed on 2026-09-13: 6
+  suites, 22 tests (`design-system`, `public-site.frontend`,
+  `app.controller`, `auth.frontend`, `auth.controller`,
+  `dashboard.frontend`).
+- Local focused public/auth-site tests passed on 2026-08-16: 4 suites, 11
+  tests (`app.controller`, `public-site.frontend`, `auth.frontend`,
+  `auth.controller`).
+- Local build passed on 2026-08-16 after the public marketing webpage and
+  sign-up route change.
+- Local ESLint passed on 2026-08-16 after the public marketing webpage and
+  sign-up route change.
+- Local text-hygiene verification passed on 2026-08-16 after the public
+  marketing webpage and sign-up route change.
+- Local build passed on 2026-08-10 after Phase 8 polished dashboard refresh.
+- Local ESLint passed on 2026-08-10 after Phase 8 polished dashboard refresh.
+- Local focused auth/dashboard website tests passed on 2026-08-10: 3 suites,
+  16 tests.
+- Local Jest unit run passed on 2026-08-10: 29 suites, 206 tests.
+- Local text-hygiene verification passed on 2026-08-10 after Phase 8 polished dashboard refresh.
 - `npm audit` passed with 0 production or development vulnerabilities on 2026-08-02.
 - Local `npm audit` was not rerun on 2026-08-10 because this PowerShell runtime
   does not expose an `npm` executable; CI retains the `npm audit
 --audit-level=moderate` gate.
 - Local mock HTTP WhatsApp Cloud integration passed on 2026-08-10: 1 suite, 2
   tests, with no live Meta call.
-- Local full integration discovery finds 11 suites and 67 tests: the mock HTTP
-  WhatsApp suite passes locally, while the 10 PostgreSQL/Testcontainers suites
-  remain environment-blocked before setup because this machine has no working
+- Local dashboard Testcontainers integration was attempted on 2026-08-10 and
+  remains environment-blocked before setup because this machine has no working
   container runtime (`Could not find a working container runtime strategy`). CI
-  remains the required real-PostgreSQL verdict.
+  remains the required real-PostgreSQL verdict for all PostgreSQL suites.
 - CI now verifies build, non-mutating lint, whitespace plus clean diff, unit tests, Testcontainers integration, dependency audit, and the full migration run/revert/run/revert-all chain.
 - GitHub Actions should run the full suite after push.
 
@@ -140,9 +180,28 @@
 - The original Phase 8 server-side tenant stub has been removed. Dashboard routes now require Phase 9 authentication and principal-derived tenant context.
 - The client cannot select `businessId`, `currency`, or `timezone`; those values come from the authenticated principal's server-side business context.
 - Dashboard endpoints call existing Phase 4, Phase 6, and Phase 7 services and add no ledger-write path.
-- The browser renderer displays existing `MoneyDto.formatted` values and does not aggregate or parse money.
+- The browser renderer formats existing read-service `MoneyDto.formatted` strings into South African trader display (`R 2 030.00`) without reading minor units, aggregating, parsing floats, or recomputing money.
+- The overview now includes a plain-language headline insight, period/account/as-of filters, KPI cards, visible Sales minus Costs equals Profit reconciliation, labelled chart panels, money-movement tables, anomaly/alert panels, and responsive loading/error/empty states.
+- The dashboard and login now follow the KasiCash brand sheet: `Kc` lockup, vivid green, black, warm ivory, Poppins-first typography, and the `Simple to run. Easy to grow.` tagline.
+- Chart bars use server-generated non-financial percentage strings derived from bigint-compatible DTO values; the browser does not read minor units or compute financial ratios.
 - Alert status metadata is read in a `SET TRANSACTION READ ONLY` transaction and scoped by the authenticated business.
-- Unit tests and a Testcontainers endpoint integration test added for Phase 8 behavior.
+- Unit tests and a Testcontainers endpoint integration test cover Phase 8 read-only behavior, authenticated tenant isolation, DTO rendering, empty-state handling, no client-side money parsing, reversal netting, pending-proposal exclusion, and other-tenant exclusion.
+- The browser website path now includes `GET /auth/login`, which posts to the
+  existing session API, relies on the existing HttpOnly cookie, and redirects to
+  `/dashboard` without storing bearer tokens in browser storage.
+- The public marketing page now routes new users to `GET /auth/signup`, a
+  setup-request page that does not create tenants, sessions, or ledger entries;
+  existing users still sign in at `GET /auth/login`.
+- Deployment scaffolding now includes `Dockerfile`, `.dockerignore`,
+  `DEPLOYMENT_DASHBOARD.md`, and an `auth:create-principal` operator script for
+  creating the first dashboard principal for an existing business.
+- The latest premium redesign centralizes public/auth/dashboard styling in
+  `src/design-system/kasicash-design-system.ts`, adds complete static public
+  trust/legal/support pages, and keeps every public page static and
+  non-financial.
+- The dashboard now includes service-query quick ranges for `1W`, `1M`, `3M`,
+  and `1Y`; an all-time selector is intentionally deferred until the backend can
+  expose a bounded earliest-record range without violating the 366-day cap.
 
 ## Phase 9 Delivered
 

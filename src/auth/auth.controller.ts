@@ -20,6 +20,7 @@ import {
   requireAuthPrincipal,
 } from './auth.guard';
 import type { AuthenticatedRequest } from './auth.guard';
+import { authLoginHtml, authSignupHtml } from './auth.frontend';
 import { AuthService } from './auth.service';
 import { SecurityRateLimiterService } from './rate-limiter.service';
 
@@ -29,6 +30,16 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly rateLimiter: SecurityRateLimiterService,
   ) {}
+
+  @Get('login')
+  loginPage(@Res() response: Response): void {
+    response.type('html').send(authLoginHtml());
+  }
+
+  @Get('signup')
+  signupPage(@Res() response: Response): void {
+    response.type('html').send(authSignupHtml());
+  }
 
   @Post('login')
   async login(

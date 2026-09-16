@@ -274,6 +274,24 @@ describe('Dashboard Integration (read-only endpoint over existing services)', ()
     expect(
       body.accountStatement?.lines.map((line) => line.delta.amountMinor),
     ).toEqual(['3000', '10000', '-2500', '-3000']);
+    expect(body.kpis).toEqual({
+      transactionCount: 4,
+      transactionCountLabel: '100 money movements',
+    });
+    expect(body.analytics.chartScales.spendByAccount).toEqual([
+      expect.objectContaining({
+        label: '500.10 Stock A',
+        valuePermille: 1000,
+        valuePercent: '100.0',
+      }),
+    ]);
+    expect(
+      body.analytics.chartScales.incomeVsExpenses.every(
+        (point) =>
+          typeof point.valuePercent === 'string' &&
+          typeof point.secondaryValuePercent === 'string',
+      ),
+    ).toBe(true);
     expect(body.anomalies.alertStatuses).toEqual([
       expect.objectContaining({
         anomalyKey: 'anomaly:v1:dashboard:test',

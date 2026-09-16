@@ -9,6 +9,7 @@ import {
   DashboardAlertStatusDto,
   DashboardAnomaliesDto,
   DashboardChartScalesDto,
+  DashboardKpiDto,
   DashboardOverviewDto,
   DashboardOverviewQuery,
   DashboardPeriodQuery,
@@ -75,6 +76,7 @@ export class DashboardService {
         ...period,
         accountId,
       },
+      kpis: buildKpis(accountStatement),
       cashPosition,
       incomeStatement,
       accountStatement,
@@ -85,6 +87,7 @@ export class DashboardService {
         chartScales: buildChartScales(
           cashBalance.points,
           incomeVsExpenses.points,
+          spendByAccount.accounts,
         ),
       },
       anomalies: dashboardAnomalies,
@@ -369,6 +372,11 @@ function buildChartScales(
     revenue: { amountMinor: string };
     expenses: { amountMinor: string };
   }>,
+  spendAccounts: Array<{
+    accountCode: string;
+    accountName: string;
+    expense: { amountMinor: string };
+  }>,
 ): DashboardChartScalesDto {
   const cashMax = maxAbs(
     cashPoints.map((point) => point.cashBalance.amountMinor),
@@ -379,17 +387,62 @@ function buildChartScales(
       point.expenses.amountMinor,
     ]),
   );
+  const spendMax = maxAbs(
+    spendAccounts.map((account) => account.expense.amountMinor),
+  );
 
   return {
-    cashBalance: cashPoints.map((point) => ({
-      label: point.label,
-      valuePermille: toPermille(point.cashBalance.amountMinor, cashMax),
-    })),
-    incomeVsExpenses: incomePoints.map((point) => ({
-      label: point.label,
-      valuePermille: toPermille(point.revenue.amountMinor, incomeMax),
-      secondaryValuePermille: toPermille(point.expenses.amountMinor, incomeMax),
-    })),
+    cashBalance: cashPoints.map((point) =>
+      toChartPoint(point.label, point.cashBalance.amountMinor, cashMax),
+    ),
+    incomeVsExpenses: incomePoints.map((point) =>
+      toChartPoint(
+        point.label,
+        point.revenue.amountMinor,
+        incomeMax,
+        point.expenses.amountMinor,
+      ),
+    ),
+    spendByAccount: spendAccounts.map((account) =>
+      toChartPoint(
+        `${account.accountCode} ${account.accountName}`,
+        account.expense.amountMinor,
+        spendMax,
+      ),
+    ),
+  };
+}
+
+function buildKpis(
+  accountStatement: { total: number; accountCode: string } | null,
+): DashboardKpiDto {
+  return {
+    transactionCount: accountStatement?.total ?? 0,
+    transactionCountLabel: accountStatement
+      ? `${accountStatement.accountCode} money movements`
+      : 'No account selected',
+  };
+}
+
+function toChartPoint(
+  label: string,
+  value: string,
+  max: bigint,
+  secondaryValue?: string,
+) {
+  const valuePermille = toPermille(value, max);
+  const secondaryValuePermille =
+    secondaryValue === undefined ? undefined : toPermille(secondaryValue, max);
+  return {
+    label,
+    valuePermille,
+    valuePercent: formatPermillePercent(valuePermille),
+    ...(secondaryValuePermille === undefined
+      ? {}
+      : {
+          secondaryValuePermille,
+          secondaryValuePercent: formatPermillePercent(secondaryValuePermille),
+        }),
   };
 }
 
@@ -406,4 +459,11 @@ function toPermille(value: string, max: bigint): number {
   const parsed = BigInt(value);
   const absolute = parsed < 0n ? -parsed : parsed;
   return Number((absolute * 1000n) / max);
+}
+
+function formatPermillePercent(valuePermille: number): string {
+  const bounded = Math.max(0, Math.min(1000, Math.trunc(valuePermille)));
+  const whole = Math.floor(bounded / 10);
+  const tenth = bounded % 10;
+  return `${whole}.${tenth}`;
 }

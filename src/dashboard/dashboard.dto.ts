@@ -33,12 +33,15 @@ export interface DashboardPeriodSelectionDto {
 export interface DashboardChartPointDto {
   label: string;
   valuePermille: number;
+  valuePercent: string;
   secondaryValuePermille?: number;
+  secondaryValuePercent?: string;
 }
 
 export interface DashboardChartScalesDto {
   cashBalance: DashboardChartPointDto[];
   incomeVsExpenses: DashboardChartPointDto[];
+  spendByAccount: DashboardChartPointDto[];
 }
 
 export interface DashboardAlertStatusDto {
@@ -54,10 +57,16 @@ export interface DashboardAnomaliesDto {
   alertStatuses: DashboardAlertStatusDto[];
 }
 
+export interface DashboardKpiDto {
+  transactionCount: number;
+  transactionCountLabel: string;
+}
+
 export interface DashboardOverviewDto {
   generatedAt: string;
   tenant: DashboardTenantContextDto;
   period: DashboardPeriodSelectionDto;
+  kpis: DashboardKpiDto;
   cashPosition: CashPositionReportDto;
   incomeStatement: IncomeStatementReportDto;
   accountStatement: AccountStatementReportDto | null;

@@ -11,6 +11,20 @@
 9. Phase 9: Security and auth - implemented locally, pending green CI.
 10. Phase 10: Observability and hardening - implemented locally, pending green CI.
 11. Independent full-system review rounds 1-3 remediation - implemented locally, pending green real-PostgreSQL CI and immutable revision evidence.
+12. Premium app/site redesign - implemented locally across public website,
+    auth pages, and read-only dashboard. The 2026-09-15 AI-review remediation
+    fixes the desktop auth contrast/layout defect, restores mobile product
+    identity/navigation, reduces dashboard card density, adds mobile
+    money-movement rows, uses contrast-correct small green labels, and aligns setup/cookie
+    copy with the real product boundary. The round-2 remediation makes mobile
+    navigation actually visible, adds About and Dashboard login to that nav,
+    fixes dark-surface green contrast, standardises `Request setup`, and
+    clarifies that the mailto flow opens a draft the user must send. The
+    round-3 polish cleanup also removes residual generic sign-up wording from
+    the setup page title and generated email body. Pending
+    follow-up visual/product
+    review, formal legal review, accessibility audit, green CI, and production
+    deployment validation.
 
 ## Phase 4 Deferred
 
@@ -33,8 +47,7 @@
 - Materialized analytics aggregates for large ledgers; any future projection must be deterministically rebuildable from ledger entries.
 - Product/category dimensions beyond chart-of-accounts families.
 - More chart types beyond cash balance, income vs expenses, and spend breakdown.
-- Front-end or dashboard chart rendering.
-- Auth-bound analytics HTTP routes with server-side tenant context.
+- Richer chart interactions beyond the Phase 8 read-only dashboard rendering.
 
 ## Phase 7 Deferred
 
@@ -50,9 +63,22 @@
 - RBAC and multi-user business membership beyond the Phase 9 one-principal/one-business model.
 - Any dashboard write actions; future writes must still use the existing confirm-then-post flow.
 - Real-time dashboard updates and push refresh.
-- Richer responsive/mobile polish.
 - I18n/localized dashboard chrome beyond existing currency-aware DTO strings.
+- Formal accessibility audit and assisted-technology pass.
+- Physical-device usability testing with informal South African traders.
 - A richer charting library once tests enforce no client-side money aggregation or float money.
+- All-time dashboard range selector after a bounded earliest-posted-record
+  endpoint/read model is designed; the current service intentionally caps
+  dashboard periods at 366 days.
+
+## Public Website Deferred
+
+- Real local trader photography or approved generated campaign imagery.
+- CMS/templates for reusable public content management after product copy is
+  approved.
+- Formal Core Web Vitals testing on low-end mobile devices and mobile data.
+- Formal legal review for pricing, fees, privacy, terms, cookies, support,
+  contact, POPIA, PAIA, and production claims.
 
 ## Phase 9 Deferred
 
