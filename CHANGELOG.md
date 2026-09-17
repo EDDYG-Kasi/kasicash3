@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Made release archives reproducible on Windows by enforcing LF endings for
+  extensionless repository-control and Docker files, so an extracted review
+  bundle passes the same text-hygiene gate as CI.
 - Cleared the GitHub Actions `npm audit --audit-level=moderate` failure by
   updating vulnerable transitive packages, aligning direct Nest 11 packages on
   `11.2.5`, and overriding `multer` to `2.4.0` without changing application
